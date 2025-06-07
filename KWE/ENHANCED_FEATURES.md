@@ -43,17 +43,22 @@
   - Better error handling and debugging
   - Shows grass types and texture counts
 
-### 3. **Multi-Layer Texture System with Brush Editing** ✅
-- **Location**: `kcm_file.py` lines 312-534 and `__init__.py` lines 893-932
+### 3. **Multi-Layer Texture System with Natural Resolution Scaling** ✅
+- **Location**: `kcm_file.py` lines 312-546 and `__init__.py` lines 896-933
 - **Features**:
   - **Multi-layer texture blending** exactly like original Kal World Editor
+  - **Natural texture resolution scaling** based on actual texture sizes from n.env file
+  - **Automatic texture scaling** - larger textures (512x512) tile less than smaller ones (64x64)
+  - **Resolution-aware material creation** with individual mapping nodes per texture
   - **Blend map creation** from KCM texture map data (256x256 grayscale images)
   - **Natural texture layering** with proper opacity blending between layers
   - **Texture paint mode support** for editing blend maps with Blender's brush tools
   - **Real-time preview** of texture changes in viewport
   - **Paint slots** for each texture layer for easy editing
   - **Enhanced material creation** with proper shader node setup
+  - **Terrain-optimized material properties** (Metallic: 1.0, Roughness: 1.0)
   - **Automatic GTX to DDS conversion** and high-quality interpolation
+  - **Resolution display** in texture manager showing ENV and DDS sizes
 
 ### 4. **ENV Texture Browser** ✅
 - **Location**: `__init__.py` lines 376-454
@@ -129,6 +134,20 @@ Before using any features, you MUST update the file paths in the test script and
 3. **Use ENV Texture Browser** to see all available textures
 4. **Click texture names** to replace terrain textures
 5. **Convert GTX to DDS** automatically when needed
+
+### **Individual Texture Resolution Scaling:**
+1. **Unique Resolution per Texture** - Each texture in n.env has its own specific resolution
+2. **Automatic Resolution Reading** - Reads individual texture sizes from n.env file
+3. **Natural Game-like Scaling** - Each texture appears at its correct scale like in the game:
+   - **32x32 textures** = Very high tiling (tiny details)
+   - **64x64 textures** = High tiling (small details)
+   - **128x128 textures** = Medium tiling (normal details)
+   - **256x256 textures** = Standard tiling (base scale)
+   - **512x512 textures** = Low tiling (large patterns)
+   - **1024x1024 textures** = Very low tiling (huge patterns)
+4. **Individual Mapping Nodes** - Each texture gets its own unique scaling calculation
+5. **Resolution Display** - Shows ENV resolution and actual DDS size in UI
+6. **Variety Support** - Handles any resolution combination (e.g., 64x128, 256x512, etc.)
 
 ### **Edit Texture Blend Maps with Brush Tools:**
 1. **Select a KCM terrain object** with multiple texture layers

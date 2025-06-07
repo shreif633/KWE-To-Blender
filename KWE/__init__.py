@@ -710,9 +710,18 @@ class KAL_PT_texture_panel(bpy.types.Panel):
             tex_node = mat.node_tree.nodes.get(f"Texture_{i}")
             has_image = tex_node and tex_node.image
 
-            # Texture slot label
+            # Get texture resolution from stored data
+            texture_resolutions = texture_data.get('texture_resolutions', [])
+            env_res = (256, 256)  # Default resolution
+            if tex_idx < len(texture_resolutions):
+                env_res = texture_resolutions[tex_idx]
+
+            # Texture slot label with resolution info
             col = row.column()
-            col.label(text=f"{i}: {tex_name}", icon='TEXTURE_DATA' if has_image else 'ERROR')
+            if has_image:
+                col.label(text=f"{i}: {tex_name} (ENV:{env_res[0]}x{env_res[1]})", icon='TEXTURE_DATA')
+            else:
+                col.label(text=f"{i}: {tex_name} (ENV:{env_res[0]}x{env_res[1]})", icon='ERROR')
 
             # Replace button
             col = row.column()

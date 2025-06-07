@@ -104,7 +104,9 @@ class KCMData:
 
 class EnvFileData:
     def __init__(self):
-        self.grass_list, self.texture_index_list = [], []
+        self.grass_list = []
+        self.texture_index_list = []
+        self.texture_resolutions = []  # Store width, height for each texture
 
     def load(self, filepath):
         if not os.path.exists(filepath):
@@ -195,10 +197,19 @@ class EnvFileData:
                         text = text_bytes.decode('ascii', errors='ignore')
                         self.texture_index_list.append(text + '.gtx')
 
-                        # Skip two integers (8 bytes total)
-                        skip_bytes = f.read(8)
-                        if len(skip_bytes) < 8:
+                        # Read texture resolution (width and height as 4-byte integers)
+                        width_bytes = f.read(4)
+                        height_bytes = f.read(4)
+                        if len(width_bytes) < 4 or len(height_bytes) < 4:
+                            # If we can't read resolution, use default values
+                            self.texture_resolutions.append((256, 256))
                             break
+
+                        width = struct.unpack('<I', width_bytes)[0]
+                        height = struct.unpack('<I', height_bytes)[0]
+                        self.texture_resolutions.append((width, height))
+
+                        print(f"  Texture {texture_count}: {text}.gtx ({width}x{height})")
 
                     except (struct.error, UnicodeDecodeError) as e:
                         print(f"Error reading texture {texture_count}: {e}")
@@ -208,11 +219,23 @@ class EnvFileData:
                 print(f"  - {len(self.grass_list)} grass types")
                 print(f"  - {len(self.texture_index_list)} textures")
 
-                # Show first few textures for verification
+                # Show first few textures with their resolutions for verification
                 if self.texture_index_list:
-                    print("First 10 textures:")
+                    print("First 10 textures with resolutions:")
                     for i, tex in enumerate(self.texture_index_list[:10]):
-                        print(f"  {i}: {tex}")
+                        if i < len(self.texture_resolutions):
+                            width, height = self.texture_resolutions[i]
+                            print(f"  {i}: {tex} ({width}x{height})")
+                        else:
+                            print(f"  {i}: {tex} (no resolution data)")
+
+                # Show resolution variety
+                if self.texture_resolutions:
+                    unique_resolutions = list(set(self.texture_resolutions))
+                    print(f"Found {len(unique_resolutions)} different texture resolutions:")
+                    for res in sorted(unique_resolutions):
+                        count = self.texture_resolutions.count(res)
+                        print(f"  {res[0]}x{res[1]}: {count} textures")
 
         except Exception as e:
             print(f"Failed to load ENV file {filepath}: {e}")
@@ -333,6 +356,7 @@ def create_terrain_material(obj, kcm, game_path):
     obj['kcm_textures'] = {
         'texture_list': texture_list_converted,
         'env_textures': env_data.texture_index_list,
+        'texture_resolutions': env_data.texture_resolutions,
         'game_path': game_path
     }
 
@@ -346,6 +370,10 @@ def create_terrain_material(obj, kcm, game_path):
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
     output = nodes.new("ShaderNodeOutputMaterial")
     bsdf.location, output.location = (1200, 0), (1400, 0)
+
+    # Set material properties for natural terrain appearance
+    bsdf.inputs['Metallic'].default_value = 1.0    # Full metallic for terrain materials
+    bsdf.inputs['Roughness'].default_value = 1.0   # Full roughness for natural terrain look
 
     # Texture coordinate node
     tex_coord = nodes.new("ShaderNodeTexCoord")
@@ -387,6 +415,16 @@ def create_multi_layer_texture_system(mat, kcm, env_data, game_path):
             available_maps += 1
     print(f"Available texturemaps: {available_maps}")
 
+    # Show resolution data availability
+    print(f"ENV texture resolutions available: {len(env_data.texture_resolutions)}")
+    if env_data.texture_resolutions:
+        active_resolutions = []
+        for i, tex_idx in enumerate(kcm.header['texture_list']):
+            if tex_idx != 255 and tex_idx < len(env_data.texture_resolutions):
+                active_resolutions.append(env_data.texture_resolutions[tex_idx])
+        if active_resolutions:
+            print(f"Active texture resolutions for this terrain: {active_resolutions}")
+
     # Get texture paths
     texture_folder = get_texture_folder_path(game_path)
     dds_output_dir = get_dds_output_path()
@@ -412,7 +450,7 @@ def create_multi_layer_texture_system(mat, kcm, env_data, game_path):
 
         print(f"Processing texture slot {i}, index {tex_idx}")
 
-        # Load texture
+        # Load texture with resolution information
         texture_node = create_texture_layer(nodes, links, mapping, i, tex_idx, env_data, texture_folder, dds_output_dir, game_path)
         if texture_node:
             texture_layers.append(texture_node)
@@ -422,7 +460,12 @@ def create_multi_layer_texture_system(mat, kcm, env_data, game_path):
                 print(f"Creating blend map for texture {i}")
                 blend_map = create_blend_map_image(kcm.texturemaps[i], f"BlendMap_{i}")
                 if blend_map:
-                    blend_node = create_blend_map_node(nodes, links, mapping, blend_map, i)
+                    # Find the texture-specific mapping node for this layer
+                    tex_mapping = nodes.get(f"Mapping_{i}")
+                    if tex_mapping:
+                        blend_node = create_blend_map_node(nodes, links, tex_mapping, blend_map, i)
+                    else:
+                        blend_node = create_blend_map_node(nodes, links, mapping, blend_map, i)
                     blend_maps.append(blend_node)
                     print(f"Created blend map node for texture {i}")
                 else:
@@ -460,12 +503,20 @@ def create_multi_layer_texture_system(mat, kcm, env_data, game_path):
 
 
 def create_texture_layer(nodes, links, mapping, layer_index, tex_idx, env_data, texture_folder, dds_output_dir, game_path):
-    """Create a single texture layer"""
+    """Create a single texture layer with proper resolution-based scaling"""
     if tex_idx >= len(env_data.texture_index_list):
         return None
 
     gtx_name = env_data.texture_index_list[tex_idx]
     texture_name = gtx_name.replace('.gtx', '')
+
+    # Get texture resolution from ENV data
+    texture_width, texture_height = (256, 256)  # Default resolution
+    if tex_idx < len(env_data.texture_resolutions):
+        texture_width, texture_height = env_data.texture_resolutions[tex_idx]
+        print(f"  Texture resolution from ENV: {texture_width}x{texture_height}")
+    else:
+        print(f"  Using default resolution: {texture_width}x{texture_height}")
 
     # Convert GTX to DDS if needed
     gtx_path = os.path.join(texture_folder, gtx_name)
@@ -482,11 +533,30 @@ def create_texture_layer(nodes, links, mapping, layer_index, tex_idx, env_data, 
         print(f"Texture not found: {gtx_name}")
         return None
 
+    # Create texture coordinate mapping node for this specific texture
+    tex_mapping = nodes.new('ShaderNodeMapping')
+    tex_mapping.name = f"Mapping_{layer_index}"
+    tex_mapping.label = f"Scale {layer_index}: {texture_name}"
+    tex_mapping.location = (-600, -layer_index * 300)
+
+    # Calculate texture scale based on resolution
+    # The game uses different texture scales based on resolution
+    # Larger textures (like 512x512) should tile less than smaller ones (like 64x64)
+    base_resolution = 256.0  # Base terrain resolution
+    scale_x = base_resolution / texture_width
+    scale_y = base_resolution / texture_height
+
+    # Apply natural texture scaling like in the game
+    tex_mapping.inputs['Scale'].default_value = (scale_x, scale_y, 1.0)
+
+    # Connect main UV mapping to this texture's mapping
+    links.new(mapping.outputs['Vector'], tex_mapping.inputs['Vector'])
+
     # Create texture node
     tex_node = nodes.new('ShaderNodeTexImage')
     tex_node.name = f"Texture_{layer_index}"
-    tex_node.label = f"Layer {layer_index}: {texture_name}"
-    tex_node.location = (-400, -layer_index * 300)
+    tex_node.label = f"Layer {layer_index}: {texture_name} ({texture_width}x{texture_height})"
+    tex_node.location = (-200, -layer_index * 300)
 
     # Load image
     try:
@@ -496,10 +566,10 @@ def create_texture_layer(nodes, links, mapping, layer_index, tex_idx, env_data, 
         tex_node.image = img
         tex_node.interpolation = 'Linear'
 
-        # Connect UV mapping
-        links.new(mapping.outputs['Vector'], tex_node.inputs['Vector'])
+        # Connect texture-specific UV mapping to texture node
+        links.new(tex_mapping.outputs['Vector'], tex_node.inputs['Vector'])
 
-        print(f"Created texture layer {layer_index}: {texture_name}")
+        print(f"Created texture layer {layer_index}: {texture_name} ({texture_width}x{texture_height}) with scale ({scale_x:.2f}, {scale_y:.2f})")
         return tex_node
 
     except Exception as e:
@@ -554,12 +624,17 @@ def create_blend_map_node(nodes, links, mapping, blend_image, layer_index):
     blend_node = nodes.new('ShaderNodeTexImage')
     blend_node.name = f"BlendMap_{layer_index}"
     blend_node.label = f"Blend {layer_index}"
-    blend_node.location = (-400, -layer_index * 300 - 150)
+    blend_node.location = (-200, -layer_index * 300 - 150)
     blend_node.image = blend_image
     blend_node.interpolation = 'Linear'
 
-    # Connect UV mapping
-    links.new(mapping.outputs['Vector'], blend_node.inputs['Vector'])
+    # Connect UV mapping (blend maps always use 1:1 mapping, not texture-specific scaling)
+    # Find the main mapping node for blend maps
+    main_mapping = nodes.get("Mapping")
+    if main_mapping:
+        links.new(main_mapping.outputs['Vector'], blend_node.inputs['Vector'])
+    else:
+        links.new(mapping.outputs['Vector'], blend_node.inputs['Vector'])
 
     return blend_node
 
@@ -625,6 +700,7 @@ def get_texture_info(obj):
     texture_data = obj.get('kcm_textures', {})
     texture_list = texture_data.get('texture_list', [])
     env_textures = texture_data.get('env_textures', [])
+    texture_resolutions = texture_data.get('texture_resolutions', [])
 
     info = {
         'terrain_name': obj.name,
@@ -644,11 +720,16 @@ def get_texture_info(obj):
                 'tex_idx': tex_idx,
                 'name': 'Unknown',
                 'has_image': False,
-                'node_name': f"Texture_{i}"
+                'node_name': f"Texture_{i}",
+                'env_resolution': (256, 256)  # Default resolution
             }
 
             if tex_idx < len(env_textures):
                 tex_info['name'] = env_textures[tex_idx].replace('.gtx', '')
+
+            # Get resolution from ENV data
+            if tex_idx < len(texture_resolutions):
+                tex_info['env_resolution'] = texture_resolutions[tex_idx]
 
             # Check if texture node exists and has image
             tex_node = mat.node_tree.nodes.get(f"Texture_{i}")
