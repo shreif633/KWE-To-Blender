@@ -18,6 +18,7 @@
   - **Accurate positioning** - Map coordinates positioned like original (256 units per tile)
   - **Correct Y coordinate inversion** - Y coordinates inverted like original (lines 3085-3087: `256-(position[1]*256)`)
   - **Proper face winding** - Face creation accounts for coordinate system changes
+  - **Fixed UV mapping** - UV coordinates corrected for Y inversion to prevent texture flipping
   - **Original rotation handling** - Maintains correct X, Y, Z orientation from Delphi 7
   - **Source code references** - Based on actual Delphi 7 source code analysis from Unit1.pas and KalClientMap.pas
   - **Enhanced 8x texture scaling** - All texture X and Y scales multiplied by 8 for better detail
@@ -191,7 +192,7 @@ Before using any features, you MUST update the file paths in the test script and
 
 ## 🔧 **Technical Implementation:**
 
-### **Original Delphi 7 Terrain Scaling and Positioning:**
+### **Original Delphi 7 Coordinate System and Scaling:**
 ```python
 # Original Delphi 7 scaling from source code analysis
 original_grid_scale = 1.0  # 1 Blender unit = 1 game meter
@@ -201,10 +202,19 @@ original_height_scale = 1.0 / 32.0  # Height divided by 32 like original
 final_grid_scale = original_grid_scale * terrain_grid_scale  # Default: 1.0 * 1.0 = 1.0
 final_height_scale = original_height_scale * height_scale    # Default: 0.03125 * 1.0 = 0.03125
 
-# Coordinate system (from lines 3085-3087 in Unit1.pas)
-terrain_offset_x = map_x * tile_size                    # X: position[0]*256
-terrain_offset_y = -map_y * tile_size                   # Y: 256-(position[1]*256) - INVERTED!
-world_y = ((256 - y) * final_grid_scale) + terrain_offset_y  # Y coordinate inversion
+# Coordinate system mapping (from lines 3085-3087 in Unit1.pas)
+# model.position.x = position[0]*256     → Blender X (direct)
+# model.position.y = position[2]/32      → Blender Z (height)
+# model.position.z = 256-(position[1]*256) → Blender Y (inverted)
+
+# Terrain positioning
+terrain_offset_x = map_x * tile_size                         # X: direct
+terrain_offset_y = map_y * tile_size                         # Y: base offset
+world_y = ((256 - y) * final_grid_scale) + terrain_offset_y  # Y: inverted like original
+
+# UV mapping correction for coordinate inversion
+u = loop.vert.co.x / (256 * final_grid_scale)               # U: direct
+v = 1.0 - (loop.vert.co.y / (256 * final_grid_scale))       # V: flipped to correct texture orientation
 
 # Default import parameters (original scale)
 terrain_scale: default=1.0  # No automatic reduction

@@ -280,28 +280,34 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     tile_size = 256 * final_grid_scale
 
     # Position the terrain based on its X,Y coordinates like in original Delphi 7
-    # Note: Y coordinate is inverted in the original Delphi 7 code!
+    # From the original code: model.position.z = 256-(position[1]*256)
+    # This means Y coordinates are inverted in the final positioning
     terrain_offset_x = map_x * tile_size
-    terrain_offset_y = -map_y * tile_size  # Invert Y coordinate like original Delphi 7
+    terrain_offset_y = map_y * tile_size  # Keep positive, inversion happens in vertex calculation
 
-    print(f"Importing KCM {map_x},{map_y} with original Delphi 7 scaling:")
+    print(f"Importing KCM {map_x},{map_y} with original Delphi 7 coordinate system:")
     print(f"  User grid scale: {terrain_grid_scale:.3f} -> Final: {final_grid_scale:.6f}")
     print(f"  User height scale: {height_scale:.3f} -> Final: {final_height_scale:.6f}")
     print(f"  Original Delphi 7: Grid=1.0, Height=1/32={original_height_scale:.6f}")
-    print(f"  World position: ({terrain_offset_x:.2f}, {terrain_offset_y:.2f})")
+    print(f"  Terrain offset: ({terrain_offset_x:.2f}, {terrain_offset_y:.2f})")
+    print(f"  Coordinate mapping: Delphi(X,Y,Height) → Blender(X,Y-inverted,Z)")
 
     # Create vertices with proper world positioning using original coordinate system
     verts = []
     for y in range(257):
         for x in range(257):
             # Original Delphi 7 coordinate system from lines 3085-3087:
-            # X: position[0]*256 (direct)
-            # Y: 256-(position[1]*256) (inverted!)
-            # Z: position[2]/32 (height)
+            # model.position.x = OPL.node[x1].position[0]*256     → Blender X
+            # model.position.y = OPL.node[x1].position[2]/32      → Blender Z (height)
+            # model.position.z = 256-(OPL.node[x1].position[1]*256) → Blender Y (inverted)
+
+            # Correct coordinate mapping for terrain:
+            # Delphi X → Blender X (direct)
+            # Delphi Y → Blender Y (inverted: 256-y like Delphi Z calculation)
+            # Delphi Height → Blender Z (height goes to Z axis)
             world_x = (x * final_grid_scale) + terrain_offset_x
-            # Apply Y coordinate inversion like original Delphi 7
-            world_y = ((256 - y) * final_grid_scale) + terrain_offset_y
-            world_z = kcm.heightmap[x, y] * final_height_scale
+            world_y = ((256 - y) * final_grid_scale) + terrain_offset_y  # Y inverted like original
+            world_z = kcm.heightmap[x, y] * final_height_scale  # Height to Z axis
             verts.append(Vector((world_x, world_y, world_z)))
 
     # Create faces with proper winding order for Y-inverted coordinates
@@ -320,7 +326,12 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     bm = bmesh.new(); bm.from_mesh(mesh)
     uv_layer = bm.loops.layers.uv.verify()
     for face in bm.faces:
-        for loop in face.loops: loop[uv_layer].uv = loop.vert.co.xy / (256 * final_grid_scale)
+        for loop in face.loops:
+            # Account for Y coordinate inversion in UV mapping
+            # Since Y coordinates are inverted (256-y), we need to flip V coordinate
+            u = loop.vert.co.x / (256 * final_grid_scale)
+            v = 1.0 - (loop.vert.co.y / (256 * final_grid_scale))  # Flip V coordinate
+            loop[uv_layer].uv = (u, v)
     bm.to_mesh(mesh); bm.free()
 
     apply_greyscale_map(mesh, kcm.colormap, "Colormap_RGB")
@@ -361,7 +372,9 @@ def apply_greyscale_map(mesh, map_data, layer_name):
     for poly in mesh.polygons:
         for loop_index in poly.loop_indices:
             uv = mesh.uv_layers.active.data[loop_index].uv
-            x, y = int(uv.x * 255), int(uv.y * 255)
+            # Account for coordinate system inversion
+            x = int(uv.x * 255)
+            y = int((1.0 - uv.y) * 255)  # Flip Y coordinate back for texture sampling
             x, y = max(0, min(255, x)), max(0, min(255, y))
             if is_greyscale:
                 val = map_data[x, y] / 255.0
