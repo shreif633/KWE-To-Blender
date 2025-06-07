@@ -639,9 +639,12 @@ def snap_horizontal_edges(left_tile, right_tile, edge_type, grid_scale):
         left_x, left_y = left_header.get('map_x', 0), left_header.get('map_y', 0)
         right_x, right_y = right_header.get('map_x', 0), right_header.get('map_y', 0)
 
-        # Calculate tile spacing (with minimal overlap)
-        base_tile_size = 256 * grid_scale
-        tile_spacing = base_tile_size * 0.999
+        # Calculate tile spacing using original game engine specifications
+        MAP_SIZE = 256
+        CELL_SIZE = 32
+        base_tile_size = MAP_SIZE * grid_scale
+        world_scale = CELL_SIZE * grid_scale
+        tile_spacing = world_scale * (MAP_SIZE / CELL_SIZE)  # Original game coordinate spacing
 
         # Calculate edge positions
         left_offset_x = left_x * tile_spacing
@@ -670,9 +673,12 @@ def snap_vertical_edges(bottom_tile, top_tile, edge_type, grid_scale):
         bottom_x, bottom_y = bottom_header.get('map_x', 0), bottom_header.get('map_y', 0)
         top_x, top_y = top_header.get('map_x', 0), top_header.get('map_y', 0)
 
-        # Calculate tile spacing (with minimal overlap)
-        base_tile_size = 256 * grid_scale
-        tile_spacing = base_tile_size * 0.999
+        # Calculate tile spacing using original game engine specifications
+        MAP_SIZE = 256
+        CELL_SIZE = 32
+        base_tile_size = MAP_SIZE * grid_scale
+        world_scale = CELL_SIZE * grid_scale
+        tile_spacing = world_scale * (MAP_SIZE / CELL_SIZE)  # Original game coordinate spacing
 
         # Calculate edge positions
         bottom_offset_y = bottom_y * tile_spacing
@@ -695,10 +701,15 @@ def snap_tile_edge_to_position(tile_obj, edge, target_pos, grid_scale, tile_size
     """Snap a specific edge of a tile to a target position"""
     mesh = tile_obj.data
 
-    # Get tile offset
+    # Get tile offset using original game engine specifications
     header = tile_obj.get('kcm_header', {})
     map_x, map_y = header.get('map_x', 0), header.get('map_y', 0)
-    tile_spacing = tile_size * 0.999
+
+    # Calculate positioning using original game coordinate system
+    MAP_SIZE = 256
+    CELL_SIZE = 32
+    world_scale = CELL_SIZE * (tile_size / MAP_SIZE)  # Convert tile_size back to grid_scale, then apply world scale
+    tile_spacing = world_scale * (MAP_SIZE / CELL_SIZE)
 
     terrain_offset_x = map_x * tile_spacing
     terrain_offset_y = map_y * tile_spacing
@@ -902,27 +913,33 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale, map_z_offs
     obj['kcm_import_grid_scale'] = final_grid_scale
     obj['kcm_import_height_scale'] = final_height_scale
 
-    # Calculate terrain tile positioning with gap elimination
-    # Each terrain tile covers 256x256 game units but we reduce spacing to eliminate gaps
-    # Kal World Editor coordinates = Blender coordinates (X=X, Y=Y, Z=Z)
-    base_tile_size = 256 * final_grid_scale
+    # Calculate terrain tile positioning based on original game engine specifications
+    # From Game Engine analysis: MAP_SIZE = 256, CELL_SIZE = 32, coordinate system 0-63
+    # Each terrain tile is exactly 256x256 game units (8192 total world size = 256 * 32 patches)
 
-    # Use minimal spacing reduction for automatic edge snapping
-    # Just enough to ensure edges connect without large overlaps
-    tile_spacing = base_tile_size * 0.999  # 0.1% overlap for edge snapping
+    # Original game engine specifications from roam.h and MMap.h:
+    MAP_SIZE = 256          # Terrain heightmap size (256x256 vertices)
+    CELL_SIZE = 32          # Game world cell size
+    PATCH_SIZE = 64         # Patch size for LOD system
 
-    # Position terrain at correct X,Y,Z coordinates based on map coordinates
-    terrain_offset_x = map_x * tile_spacing                 # X positioning with reduced spacing
-    terrain_offset_y = map_y * tile_spacing                 # Y positioning with reduced spacing
-    terrain_offset_z = map_z * (base_tile_size / 32.0)     # Z positioning based on map_z (elevation offset)
+    # Calculate tile size based on original game specifications
+    # Each KCM covers MAP_SIZE game units, scaled by CELL_SIZE for world positioning
+    base_tile_size = MAP_SIZE * final_grid_scale
+    world_scale = CELL_SIZE * final_grid_scale
 
-    print(f"Importing KCM {map_x},{map_y},{map_z} with minimal overlap (0.1% for auto-snap):")
+    # Position terrain using original game coordinate system
+    # Game world coordinates: 0-63 map coordinates, each representing CELL_SIZE * MAP_SIZE world units
+    terrain_offset_x = map_x * world_scale * (MAP_SIZE / CELL_SIZE)  # X positioning (original game scale)
+    terrain_offset_y = map_y * world_scale * (MAP_SIZE / CELL_SIZE)  # Y positioning (original game scale)
+    terrain_offset_z = map_z * (base_tile_size / 32.0)              # Z positioning (elevation offset)
+
+    print(f"Importing KCM {map_x},{map_y},{map_z} with original game engine coordinates:")
     print(f"  User grid scale: {terrain_grid_scale:.3f} -> Final: {final_grid_scale:.6f}")
     print(f"  User height scale: {height_scale:.3f} -> Final: {final_height_scale:.6f}")
-    print(f"  Original Delphi 7: Grid=1.0, Height=1/32={original_height_scale:.6f}")
-    print(f"  Tile size: {base_tile_size:.2f}, Spacing: {tile_spacing:.2f}")
+    print(f"  Original game specs: MAP_SIZE={MAP_SIZE}, CELL_SIZE={CELL_SIZE}")
+    print(f"  Tile size: {base_tile_size:.2f}, World scale: {world_scale:.2f}")
     print(f"  Terrain position: ({terrain_offset_x:.2f}, {terrain_offset_y:.2f}, {terrain_offset_z:.2f})")
-    print(f"  Features: Minimal overlap, auto-snap ready, transforms locked")
+    print(f"  Features: Original game coordinates, proper scaling, transforms locked")
 
     # Create vertices with overlapping edges to eliminate gaps
     # Each tile maintains full 256x256 size but positioned with reduced spacing
