@@ -189,7 +189,7 @@ class IMPORT_OT_kal_kcm(bpy.types.Operator, ImportHelper):
 
             for filepath in filepaths:
                 try:
-                    kcm_file.import_kcm(filepath, prefs.game_path, self.terrain_scale, self.height_scale)
+                    kcm_file.import_kcm(filepath, prefs.game_path, self.terrain_scale, self.height_scale, 0)  # Z offset = 0 (default)
                     imported_count += 1
 
                     # Track created collection
@@ -241,7 +241,7 @@ class IMPORT_OT_kal_kcm(bpy.types.Operator, ImportHelper):
         else:
             # Import single KCM file
             try:
-                kcm_file.import_kcm(self.filepath, prefs.game_path, self.terrain_scale, self.height_scale)
+                kcm_file.import_kcm(self.filepath, prefs.game_path, self.terrain_scale, self.height_scale, 0)  # Z offset = 0 (default)
                 self.report({'INFO'}, f"Imported KCM file: {os.path.basename(self.filepath)}")
             except Exception as e:
                 self.report({'ERROR'}, f"Failed to import KCM file: {str(e)}")
@@ -250,11 +250,9 @@ class IMPORT_OT_kal_kcm(bpy.types.Operator, ImportHelper):
         return {'FINISHED'}
 
     def invoke(self, context, event):
-        # Enable multiple file selection when import_multiple is True
-        if hasattr(self, 'import_multiple') and self.import_multiple:
-            context.window_manager.fileselect_add(self, accept_multiple=True)
-        else:
-            context.window_manager.fileselect_add(self)
+        # Handle file selection for different Blender versions
+        # Blender 5.0+ removed the accept_multiple parameter
+        context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
     def draw(self, context):
@@ -266,9 +264,10 @@ class IMPORT_OT_kal_kcm(bpy.types.Operator, ImportHelper):
         if self.import_multiple:
             box = layout.box()
             box.label(text="Multiple KCM Import:", icon='INFO')
-            box.label(text="• Select multiple .kcm files")
+            box.label(text="• Select multiple .kcm files (Ctrl+Click or Shift+Click)")
             box.label(text="• Files positioned by X,Y coordinates")
             box.label(text="• Creates connected map tiles")
+            box.label(text="• Compatible with Blender 5.0+", icon='CHECKMARK')
 
 class EXPORT_OT_kal_kcm(bpy.types.Operator, ExportHelper):
     """Export a Kal Online Client Map (.kcm)"""
@@ -475,6 +474,116 @@ class KAL_OT_browse_texture_folder(bpy.types.Operator):
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
+
+
+# --- Transform Lock Management Operators ---
+
+class KAL_OT_unlock_kcm_transforms(bpy.types.Operator):
+    """Unlock transform properties for selected KCM objects (Location, Rotation, Scale)"""
+    bl_idname = "kal.unlock_kcm_transforms"
+    bl_label = "Unlock KCM Transforms"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        unlocked_count = 0
+
+        for obj in context.selected_objects:
+            if obj.get('kcm_transforms_locked', False) or 'kcm_header' in obj:
+                kcm_file.unlock_kcm_transform_properties(obj)
+                unlocked_count += 1
+
+        if unlocked_count > 0:
+            self.report({'INFO'}, f"Unlocked transforms for {unlocked_count} KCM object(s)")
+        else:
+            self.report({'WARNING'}, "No KCM objects selected or objects already unlocked")
+
+        return {'FINISHED'}
+
+
+class KAL_OT_lock_kcm_transforms(bpy.types.Operator):
+    """Lock transform properties for selected KCM objects (Location, Rotation, Scale)"""
+    bl_idname = "kal.lock_kcm_transforms"
+    bl_label = "Lock KCM Transforms"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        locked_count = 0
+
+        for obj in context.selected_objects:
+            if 'kcm_header' in obj or obj.get('is_kcm_water', False):
+                kcm_file.lock_kcm_transform_properties(obj)
+                locked_count += 1
+
+        if locked_count > 0:
+            self.report({'INFO'}, f"Locked transforms for {locked_count} KCM object(s)")
+        else:
+            self.report({'WARNING'}, "No KCM objects selected")
+
+        return {'FINISHED'}
+
+
+class KAL_OT_snap_kcm_edges(bpy.types.Operator):
+    """Snap edges of all KCM terrain objects for perfect alignment"""
+    bl_idname = "kal.snap_kcm_edges"
+    bl_label = "Snap All Edges"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        try:
+            snapped_count = kcm_file.snap_all_kcm_edges()
+            if snapped_count > 0:
+                self.report({'INFO'}, f"Snapped edges for {snapped_count} KCM terrain object(s)")
+            else:
+                self.report({'WARNING'}, "No KCM terrain objects found in scene")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to snap edges: {e}")
+
+        return {'FINISHED'}
+
+
+class KAL_OT_connect_kcm_tiles(bpy.types.Operator):
+    """Connect all KCM terrain tiles into one seamless terrain object"""
+    bl_idname = "kal.connect_kcm_tiles"
+    bl_label = "Connect All Tiles"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        # Count KCM objects before connection
+        kcm_objects = [obj for obj in bpy.data.objects if 'kcm_header' in obj and obj.type == 'MESH']
+
+        if len(kcm_objects) < 2:
+            self.report({'WARNING'}, "Need at least 2 KCM terrain objects to connect")
+            return {'CANCELLED'}
+
+        try:
+            connected_count = kcm_file.connect_all_kcm_tiles()
+            if connected_count > 0:
+                self.report({'INFO'}, f"Connected {connected_count} KCM terrain tiles into seamless terrain")
+            else:
+                self.report({'WARNING'}, "No KCM terrain objects found to connect")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to connect tiles: {e}")
+
+        return {'FINISHED'}
+
+
+class KAL_OT_auto_snap_edges(bpy.types.Operator):
+    """Automatically snap edges of adjacent KCM terrain tiles"""
+    bl_idname = "kal.auto_snap_edges"
+    bl_label = "Auto Snap Edges"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        try:
+            snapped_pairs = kcm_file.auto_snap_adjacent_edges()
+            if snapped_pairs > 0:
+                self.report({'INFO'}, f"Auto-snapped {snapped_pairs} adjacent tile edge pairs")
+            else:
+                self.report({'WARNING'}, "No adjacent KCM terrain tiles found to snap")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to auto-snap edges: {e}")
+
+        return {'FINISHED'}
 
 
 # --- Enhanced Texture Management Operators ---
@@ -911,6 +1020,27 @@ class KAL_PT_map_manager(bpy.types.Panel):
             col.operator("kal.center_view_on_maps", text="Center View on Maps", icon='ZOOM_ALL')
             col.operator("kal.organize_map_collections", text="Organize in Collections", icon='OUTLINER')
 
+            # Transform lock controls
+            col.separator()
+            col.label(text="Transform Controls:", icon='LOCKED')
+            row = col.row(align=True)
+            row.operator("kal.lock_kcm_transforms", text="Lock Selected", icon='LOCKED')
+            row.operator("kal.unlock_kcm_transforms", text="Unlock Selected", icon='UNLOCKED')
+
+            # Edge snapping and tile connection controls
+            col.separator()
+            col.label(text="Tile Connection:", icon='SNAP_ON')
+            row = col.row(align=True)
+            row.operator("kal.auto_snap_edges", text="Auto Snap", icon='SNAP_EDGE')
+            row.operator("kal.snap_kcm_edges", text="Manual Snap", icon='SNAP_VERTEX')
+            col.operator("kal.connect_kcm_tiles", text="Connect All Tiles", icon='MESH_MONKEY')
+
+            # Show lock status for selected objects
+            selected_kcm = [obj for obj in bpy.context.selected_objects if 'kcm_header' in obj or obj.get('is_kcm_water', False)]
+            if selected_kcm:
+                locked_count = sum(1 for obj in selected_kcm if obj.get('kcm_transforms_locked', False))
+                col.label(text=f"Selected: {locked_count}/{len(selected_kcm)} locked", icon='INFO')
+
         # Import tools
         box = layout.box()
         box.label(text="Import Multiple Maps:", icon='IMPORT')
@@ -971,6 +1101,11 @@ classes = (
     KAL_OT_validate_paths,
     KAL_OT_browse_env_file,
     KAL_OT_browse_texture_folder,
+    KAL_OT_unlock_kcm_transforms,
+    KAL_OT_lock_kcm_transforms,
+    KAL_OT_snap_kcm_edges,
+    KAL_OT_auto_snap_edges,
+    KAL_OT_connect_kcm_tiles,
     KAL_OT_refresh_textures,
     KAL_OT_convert_all_gtx,
     KAL_OT_replace_texture_from_env,

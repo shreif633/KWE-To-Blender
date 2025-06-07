@@ -242,12 +242,12 @@ class EnvFileData:
             import traceback
             traceback.print_exc()
 
-def create_water_plane(kcm, map_x, map_y, final_grid_scale, final_height_scale, terrain_offset_x, terrain_offset_y):
+def create_water_plane(kcm, map_x, map_y, final_grid_scale, final_height_scale, terrain_offset_x, terrain_offset_y, terrain_offset_z=0):
     """Create water plane based on original Delphi 7 water feature implementation"""
     # Always create water plane for every KCM import (single or multiple)
-    # Based on original CreateWater procedure that creates a simple plane at Y=0 covering 256x256 area
+    # Based on original CreateWater procedure that creates a simple plane covering 256x256 area
 
-    water_level_height = 0  # Water plane height (Y=0 in original Delphi coordinates)
+    water_level_height = 1584  # Water plane height (1584 height units as requested)
 
     # Optional: Check terrain height for informational purposes
     water_height_threshold = 1580  # Height threshold from original Delphi 7 source
@@ -282,14 +282,17 @@ def create_water_plane(kcm, map_x, map_y, final_grid_scale, final_height_scale, 
     water_obj['is_kcm_water'] = True
     water_obj['kcm_map_x'] = map_x
     water_obj['kcm_map_y'] = map_y
-    water_obj['water_height_threshold'] = 1580
+    water_obj['kcm_map_z'] = terrain_offset_z / (256 * final_grid_scale / 32.0) if final_grid_scale > 0 else 0  # Convert back to map_z units
+    water_obj['water_height'] = 1584  # Water at height 1584
 
     # Convert water level height using the same coordinate system as terrain
-    # In Delphi: Y=0 for water, in Blender this becomes Z coordinate
-    water_z = water_level_height * final_height_scale
+    # Simple coordinate system: water height goes to Z axis (up/down)
+    # Water positioned at specified height (1584) + terrain Z offset
+    water_z = (water_level_height * final_height_scale) + terrain_offset_z
 
     # Create water plane vertices (4 corners covering 256x256 area)
-    # Apply same coordinate mapping as terrain: Delphi Y → Blender Y (inverted)
+    # Water positioned at correct X,Y coordinates to match terrain positioning
+    # Water plane covers the X-Y plane at the specified Z height
     water_verts = [
         Vector((terrain_offset_x, terrain_offset_y + (256 * final_grid_scale), water_z)),  # p3: (0, 255)
         Vector((terrain_offset_x + (256 * final_grid_scale), terrain_offset_y + (256 * final_grid_scale), water_z)),  # p4: (255, 255)
@@ -443,7 +446,8 @@ def print_water_import_summary():
             for water_obj in water_list:
                 map_x = water_obj.get('kcm_map_x', 'Unknown')
                 map_y = water_obj.get('kcm_map_y', 'Unknown')
-                print(f"    - {water_obj.name}: Map({map_x},{map_y})")
+                map_z = water_obj.get('kcm_map_z', 0)
+                print(f"    - {water_obj.name}: Map({map_x},{map_y},{map_z})")
 
     # Show material sharing
     shared_materials = set()
@@ -457,8 +461,415 @@ def print_water_import_summary():
     print("=== End Water Summary ===\n")
 
 
+def lock_kcm_transform_properties(obj):
+    """Lock location, rotation, and scale properties for KCM objects to prevent accidental modification"""
+    if not obj:
+        return
+
+    # Lock all location axes (X, Y, Z)
+    obj.lock_location[0] = True  # X axis
+    obj.lock_location[1] = True  # Y axis
+    obj.lock_location[2] = True  # Z axis
+
+    # Lock all rotation axes (X, Y, Z)
+    obj.lock_rotation[0] = True  # X axis
+    obj.lock_rotation[1] = True  # Y axis
+    obj.lock_rotation[2] = True  # Z axis
+
+    # Lock all scale axes (X, Y, Z)
+    obj.lock_scale[0] = True  # X axis
+    obj.lock_scale[1] = True  # Y axis
+    obj.lock_scale[2] = True  # Z axis
+
+    # Mark object as KCM terrain with locked transforms
+    obj['kcm_transforms_locked'] = True
+
+    print(f"Locked transform properties for {obj.name} (Location, Rotation, Scale)")
+
+
+def unlock_kcm_transform_properties(obj):
+    """Unlock location, rotation, and scale properties for KCM objects (utility function)"""
+    if not obj:
+        return
+
+    # Unlock all location axes (X, Y, Z)
+    obj.lock_location[0] = False  # X axis
+    obj.lock_location[1] = False  # Y axis
+    obj.lock_location[2] = False  # Z axis
+
+    # Unlock all rotation axes (X, Y, Z)
+    obj.lock_rotation[0] = False  # X axis
+    obj.lock_rotation[1] = False  # Y axis
+    obj.lock_rotation[2] = False  # Z axis
+
+    # Unlock all scale axes (X, Y, Z)
+    obj.lock_scale[0] = False  # X axis
+    obj.lock_scale[1] = False  # Y axis
+    obj.lock_scale[2] = False  # Z axis
+
+    # Remove lock marker
+    if 'kcm_transforms_locked' in obj:
+        del obj['kcm_transforms_locked']
+
+    print(f"Unlocked transform properties for {obj.name} (Location, Rotation, Scale)")
+
+
+def connect_all_kcm_tiles():
+    """Connect all KCM terrain tiles by merging overlapping edges"""
+    kcm_objects = [obj for obj in bpy.data.objects if 'kcm_header' in obj and obj.type == 'MESH']
+
+    if len(kcm_objects) < 2:
+        print("Need at least 2 KCM terrain objects to connect")
+        return 0
+
+    # Temporarily unlock transforms for merging
+    for obj in kcm_objects:
+        unlock_kcm_transform_properties(obj)
+
+    # Enter Edit mode and select all KCM objects
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in kcm_objects:
+        obj.select_set(True)
+
+    if kcm_objects:
+        bpy.context.view_layer.objects.active = kcm_objects[0]
+
+    # Join all KCM objects into one
+    bpy.ops.object.join()
+
+    # Get the joined object
+    joined_obj = bpy.context.active_object
+
+    # Enter Edit mode
+    bpy.ops.object.mode_set(mode='EDIT')
+
+    # Select all vertices
+    bpy.ops.mesh.select_all(action='SELECT')
+
+    # Remove doubles (merge overlapping vertices)
+    # Use a larger distance to ensure edge vertices are properly merged
+    grid_scale = joined_obj.get('kcm_import_grid_scale', 1.0)
+    merge_distance = grid_scale * 0.1  # Increased merge distance for better edge connection
+
+    bpy.ops.mesh.remove_doubles(threshold=merge_distance)
+
+    # Recalculate normals
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+
+    # Exit Edit mode
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    # Lock transforms again
+    lock_kcm_transform_properties(joined_obj)
+
+    # Rename the joined object
+    joined_obj.name = "KCM_Connected_Terrain"
+
+    print(f"Connected {len(kcm_objects)} KCM terrain tiles into seamless terrain")
+    print(f"Merged overlapping vertices with distance threshold: {merge_distance:.6f}")
+
+    return len(kcm_objects)
+
+
+def auto_snap_adjacent_edges():
+    """Automatically snap edges of adjacent KCM terrain tiles for seamless connection"""
+    kcm_objects = [obj for obj in bpy.data.objects if 'kcm_header' in obj and obj.type == 'MESH']
+
+    if len(kcm_objects) < 2:
+        print("Need at least 2 KCM terrain objects for edge snapping")
+        return 0
+
+    # Group tiles by their map coordinates
+    tile_map = {}
+    for obj in kcm_objects:
+        header = obj.get('kcm_header', {})
+        map_x = header.get('map_x', 0)
+        map_y = header.get('map_y', 0)
+        tile_map[(map_x, map_y)] = obj
+
+    snapped_pairs = 0
+
+    # Find adjacent tiles and snap their edges
+    for (map_x, map_y), obj in tile_map.items():
+        grid_scale = obj.get('kcm_import_grid_scale', 1.0)
+
+        # Check for adjacent tiles (right, top, bottom, left)
+        adjacent_coords = [
+            (map_x + 1, map_y),  # Right neighbor
+            (map_x, map_y + 1),  # Top neighbor
+            (map_x, map_y - 1),  # Bottom neighbor
+            (map_x - 1, map_y)   # Left neighbor
+        ]
+
+        for adj_x, adj_y in adjacent_coords:
+            if (adj_x, adj_y) in tile_map:
+                adj_obj = tile_map[(adj_x, adj_y)]
+
+                # Snap edges between these two adjacent tiles
+                if snap_adjacent_tile_edges(obj, adj_obj, map_x, map_y, adj_x, adj_y, grid_scale):
+                    snapped_pairs += 1
+                    print(f"Snapped edges between {obj.name} and {adj_obj.name}")
+
+    print(f"Auto-snapped {snapped_pairs} adjacent tile edge pairs")
+    return snapped_pairs
+
+
+def snap_adjacent_tile_edges(tile1, tile2, x1, y1, x2, y2, grid_scale):
+    """Snap edges between two adjacent tiles for seamless connection"""
+    # Determine which edges are adjacent
+    if x2 == x1 + 1 and y2 == y1:  # tile2 is to the right of tile1
+        return snap_horizontal_edges(tile1, tile2, 'right', grid_scale)
+    elif x2 == x1 - 1 and y2 == y1:  # tile2 is to the left of tile1
+        return snap_horizontal_edges(tile2, tile1, 'right', grid_scale)
+    elif y2 == y1 + 1 and x2 == x1:  # tile2 is above tile1
+        return snap_vertical_edges(tile1, tile2, 'top', grid_scale)
+    elif y2 == y1 - 1 and x2 == x1:  # tile2 is below tile1
+        return snap_vertical_edges(tile2, tile1, 'top', grid_scale)
+
+    return False
+
+
+def snap_horizontal_edges(left_tile, right_tile, edge_type, grid_scale):
+    """Snap horizontal edges between left and right tiles"""
+    try:
+        # Get tile positions
+        left_header = left_tile.get('kcm_header', {})
+        right_header = right_tile.get('kcm_header', {})
+
+        left_x, left_y = left_header.get('map_x', 0), left_header.get('map_y', 0)
+        right_x, right_y = right_header.get('map_x', 0), right_header.get('map_y', 0)
+
+        # Calculate tile spacing (with minimal overlap)
+        base_tile_size = 256 * grid_scale
+        tile_spacing = base_tile_size * 0.999
+
+        # Calculate edge positions
+        left_offset_x = left_x * tile_spacing
+        right_offset_x = right_x * tile_spacing
+
+        # Target edge position (midpoint between tiles)
+        target_edge_x = left_offset_x + base_tile_size
+
+        # Snap right edge of left tile and left edge of right tile to target position
+        snap_tile_edge_to_position(left_tile, 'right', target_edge_x, grid_scale, base_tile_size)
+        snap_tile_edge_to_position(right_tile, 'left', target_edge_x, grid_scale, base_tile_size)
+
+        return True
+    except Exception as e:
+        print(f"Error snapping horizontal edges: {e}")
+        return False
+
+
+def snap_vertical_edges(bottom_tile, top_tile, edge_type, grid_scale):
+    """Snap vertical edges between bottom and top tiles"""
+    try:
+        # Get tile positions
+        bottom_header = bottom_tile.get('kcm_header', {})
+        top_header = top_tile.get('kcm_header', {})
+
+        bottom_x, bottom_y = bottom_header.get('map_x', 0), bottom_header.get('map_y', 0)
+        top_x, top_y = top_header.get('map_x', 0), top_header.get('map_y', 0)
+
+        # Calculate tile spacing (with minimal overlap)
+        base_tile_size = 256 * grid_scale
+        tile_spacing = base_tile_size * 0.999
+
+        # Calculate edge positions
+        bottom_offset_y = bottom_y * tile_spacing
+        top_offset_y = top_y * tile_spacing
+
+        # Target edge position (midpoint between tiles)
+        target_edge_y = bottom_offset_y + base_tile_size
+
+        # Snap top edge of bottom tile and bottom edge of top tile to target position
+        snap_tile_edge_to_position(bottom_tile, 'top', target_edge_y, grid_scale, base_tile_size)
+        snap_tile_edge_to_position(top_tile, 'bottom', target_edge_y, grid_scale, base_tile_size)
+
+        return True
+    except Exception as e:
+        print(f"Error snapping vertical edges: {e}")
+        return False
+
+
+def snap_tile_edge_to_position(tile_obj, edge, target_pos, grid_scale, tile_size):
+    """Snap a specific edge of a tile to a target position"""
+    mesh = tile_obj.data
+
+    # Get tile offset
+    header = tile_obj.get('kcm_header', {})
+    map_x, map_y = header.get('map_x', 0), header.get('map_y', 0)
+    tile_spacing = tile_size * 0.999
+
+    terrain_offset_x = map_x * tile_spacing
+    terrain_offset_y = map_y * tile_spacing
+
+    # Use bmesh for vertex operations
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+
+    edge_tolerance = grid_scale * 0.1
+    snapped_count = 0
+
+    for vert in bm.verts:
+        x, y, z = vert.co
+
+        # Determine if vertex is on the specified edge
+        on_edge = False
+        new_pos = None
+
+        if edge == 'right':
+            # Right edge: X coordinate should be at terrain_offset_x + tile_size
+            if abs(x - (terrain_offset_x + tile_size)) < edge_tolerance:
+                new_pos = (target_pos, y, z)
+                on_edge = True
+        elif edge == 'left':
+            # Left edge: X coordinate should be at terrain_offset_x
+            if abs(x - terrain_offset_x) < edge_tolerance:
+                new_pos = (target_pos, y, z)
+                on_edge = True
+        elif edge == 'top':
+            # Top edge: Y coordinate should be at terrain_offset_y + tile_size
+            if abs(y - (terrain_offset_y + tile_size)) < edge_tolerance:
+                new_pos = (x, target_pos, z)
+                on_edge = True
+        elif edge == 'bottom':
+            # Bottom edge: Y coordinate should be at terrain_offset_y
+            if abs(y - terrain_offset_y) < edge_tolerance:
+                new_pos = (x, target_pos, z)
+                on_edge = True
+
+        if on_edge and new_pos:
+            vert.co = new_pos
+            snapped_count += 1
+
+    # Update mesh
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+
+    return snapped_count > 0
+
+
+def snap_all_kcm_edges():
+    """Snap edges of all KCM terrain objects in the scene for perfect alignment"""
+    kcm_objects = [obj for obj in bpy.data.objects if 'kcm_header' in obj and obj.type == 'MESH']
+
+    if not kcm_objects:
+        print("No KCM terrain objects found in scene")
+        return 0
+
+    snapped_count = 0
+
+    for obj in kcm_objects:
+        # Get terrain properties
+        header = obj.get('kcm_header', {})
+        map_x = header.get('map_x', 0)
+        map_y = header.get('map_y', 0)
+
+        # Get import scales
+        grid_scale = obj.get('kcm_import_grid_scale', 1.0)
+
+        # Calculate terrain position
+        tile_size = 256 * grid_scale
+        terrain_offset_x = map_x * tile_size
+        terrain_offset_y = map_y * tile_size
+
+        # Snap edges of this terrain object
+        snap_terrain_edges(obj.data, grid_scale, terrain_offset_x, terrain_offset_y)
+        snapped_count += 1
+
+        print(f"Snapped edges for {obj.name} at position ({terrain_offset_x:.1f}, {terrain_offset_y:.1f})")
+
+    print(f"Completed edge snapping for {snapped_count} KCM terrain objects")
+    return snapped_count
+
+
+def snap_terrain_edges(mesh, grid_scale, terrain_offset_x=0, terrain_offset_y=0, tile_size=None):
+    """Snap terrain edge vertices to exact grid positions for perfect edge alignment"""
+    if not mesh or not mesh.vertices:
+        return
+
+    # Use bmesh for vertex operations
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+
+    # Get terrain bounds for edge detection (accounting for terrain offset)
+    if tile_size is None:
+        terrain_size = 256 * grid_scale
+    else:
+        terrain_size = tile_size
+    edge_tolerance = grid_scale * 0.01  # Very tight tolerance for edge detection
+
+    # Calculate exact edge positions
+    left_edge = terrain_offset_x
+    right_edge = terrain_offset_x + terrain_size
+    bottom_edge = terrain_offset_y
+    top_edge = terrain_offset_y + terrain_size
+
+    snapped_count = 0
+
+    # Snap vertices to exact edge positions
+    for vert in bm.verts:
+        x, y, z = vert.co
+        new_x, new_y = x, y
+        snapped = False
+
+        # Snap to left edge
+        if abs(x - left_edge) < edge_tolerance:
+            new_x = left_edge
+            snapped = True
+
+        # Snap to right edge
+        elif abs(x - right_edge) < edge_tolerance:
+            new_x = right_edge
+            snapped = True
+
+        # Snap to bottom edge
+        if abs(y - bottom_edge) < edge_tolerance:
+            new_y = bottom_edge
+            snapped = True
+
+        # Snap to top edge
+        elif abs(y - top_edge) < edge_tolerance:
+            new_y = top_edge
+            snapped = True
+
+        # Apply snapping if vertex was on an edge
+        if snapped:
+            vert.co = (new_x, new_y, z)
+            snapped_count += 1
+
+    # Also snap vertices to exact grid positions within the terrain
+    # This ensures perfect alignment between adjacent tiles
+    for vert in bm.verts:
+        x, y, z = vert.co
+
+        # Calculate relative position within the terrain
+        rel_x = x - terrain_offset_x
+        rel_y = y - terrain_offset_y
+
+        # Snap to exact grid positions (every grid_scale units)
+        if 0 <= rel_x <= terrain_size and 0 <= rel_y <= terrain_size:
+            grid_x = round(rel_x / grid_scale) * grid_scale
+            grid_y = round(rel_y / grid_scale) * grid_scale
+
+            # Only snap if the difference is very small (floating point precision issues)
+            if abs(rel_x - grid_x) < grid_scale * 0.001 and abs(rel_y - grid_y) < grid_scale * 0.001:
+                vert.co = (terrain_offset_x + grid_x, terrain_offset_y + grid_y, z)
+
+    if snapped_count > 0:
+        print(f"Snapped {snapped_count} edge vertices to exact positions for perfect alignment")
+
+    # Update mesh
+    bm.to_mesh(mesh)
+    bm.free()
+
+    mesh.update()
+    mesh.validate()
+
+
 # --- KCM Import Logic ---
-def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
+def import_kcm(filepath, game_path, terrain_grid_scale, height_scale, map_z_offset=0):
     kcm = KCMData()
     if not kcm.load(filepath): return
 
@@ -479,6 +890,11 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     map_x = kcm.header['map_x']
     map_y = kcm.header['map_y']
 
+    # Z coordinate support - KCM files don't store map_z, but we can specify it via parameter
+    # From original Delphi 7: Z coordinate affects positioning in 3D space (elevation layers)
+    # This allows importing KCM files at different elevation levels for multi-level terrain
+    map_z = map_z_offset  # Use provided Z coordinate offset
+
     mesh_name = f"KCM_{map_x}_{map_y}"
     mesh = bpy.data.meshes.new(name=mesh_name)
     obj = bpy.data.objects.new(mesh_name, mesh)
@@ -486,43 +902,40 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     obj['kcm_import_grid_scale'] = final_grid_scale
     obj['kcm_import_height_scale'] = final_height_scale
 
-    # Calculate terrain tile positioning based on original Delphi 7 code
-    # Each terrain tile is 256x256 game units
-    # From lines 3085-3087 in Unit1.pas:
-    # X: position[0]*256 (direct)
-    # Y: 256-(position[1]*256) (inverted!)
-    # Z: position[2]/32 (height)
-    tile_size = 256 * final_grid_scale
+    # Calculate terrain tile positioning with gap elimination
+    # Each terrain tile covers 256x256 game units but we reduce spacing to eliminate gaps
+    # Kal World Editor coordinates = Blender coordinates (X=X, Y=Y, Z=Z)
+    base_tile_size = 256 * final_grid_scale
 
-    # Position the terrain based on its X,Y coordinates like in original Delphi 7
-    # From the original code: model.position.z = 256-(position[1]*256)
-    # This means Y coordinates are inverted in the final positioning
-    terrain_offset_x = map_x * tile_size
-    terrain_offset_y = map_y * tile_size  # Keep positive, inversion happens in vertex calculation
+    # Use minimal spacing reduction for automatic edge snapping
+    # Just enough to ensure edges connect without large overlaps
+    tile_spacing = base_tile_size * 0.999  # 0.1% overlap for edge snapping
 
-    print(f"Importing KCM {map_x},{map_y} with original Delphi 7 coordinate system:")
+    # Position terrain at correct X,Y,Z coordinates based on map coordinates
+    terrain_offset_x = map_x * tile_spacing                 # X positioning with reduced spacing
+    terrain_offset_y = map_y * tile_spacing                 # Y positioning with reduced spacing
+    terrain_offset_z = map_z * (base_tile_size / 32.0)     # Z positioning based on map_z (elevation offset)
+
+    print(f"Importing KCM {map_x},{map_y},{map_z} with minimal overlap (0.1% for auto-snap):")
     print(f"  User grid scale: {terrain_grid_scale:.3f} -> Final: {final_grid_scale:.6f}")
     print(f"  User height scale: {height_scale:.3f} -> Final: {final_height_scale:.6f}")
     print(f"  Original Delphi 7: Grid=1.0, Height=1/32={original_height_scale:.6f}")
-    print(f"  Terrain offset: ({terrain_offset_x:.2f}, {terrain_offset_y:.2f})")
-    print(f"  Coordinate mapping: Delphi(X,Y,Height) → Blender(X,Y-inverted,Z)")
+    print(f"  Tile size: {base_tile_size:.2f}, Spacing: {tile_spacing:.2f}")
+    print(f"  Terrain position: ({terrain_offset_x:.2f}, {terrain_offset_y:.2f}, {terrain_offset_z:.2f})")
+    print(f"  Features: Minimal overlap, auto-snap ready, transforms locked")
 
-    # Create vertices with proper world positioning using original coordinate system
+    # Create vertices with overlapping edges to eliminate gaps
+    # Each tile maintains full 256x256 size but positioned with reduced spacing
+    # This creates slight overlap at edges for seamless connection
     verts = []
     for y in range(257):
         for x in range(257):
-            # Original Delphi 7 coordinate system from lines 3085-3087:
-            # model.position.x = OPL.node[x1].position[0]*256     → Blender X
-            # model.position.y = OPL.node[x1].position[2]/32      → Blender Z (height)
-            # model.position.z = 256-(OPL.node[x1].position[1]*256) → Blender Y (inverted)
+            # Calculate vertex position with full tile size but positioned at reduced spacing
+            # This creates overlapping edges that eliminate gaps between tiles
 
-            # Correct coordinate mapping for terrain:
-            # Delphi X → Blender X (direct)
-            # Delphi Y → Blender Y (inverted: 256-y like Delphi Z calculation)
-            # Delphi Height → Blender Z (height goes to Z axis)
-            world_x = (x * final_grid_scale) + terrain_offset_x
-            world_y = ((256 - y) * final_grid_scale) + terrain_offset_y  # Y inverted like original
-            world_z = kcm.heightmap[x, y] * final_height_scale  # Height to Z axis
+            world_x = terrain_offset_x + (x * final_grid_scale)                      # X from offset using full scale
+            world_y = terrain_offset_y + ((256 - y) * final_grid_scale)             # Y from offset using full scale (inverted)
+            world_z = (kcm.heightmap[x, y] * final_height_scale) + terrain_offset_z  # Z = height + elevation offset
             verts.append(Vector((world_x, world_y, world_z)))
 
     # Create faces with proper winding order based on original Delphi 7 source
@@ -546,15 +959,20 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
             # Create quad with correct counter-clockwise winding order (matches Delphi pattern)
             faces.append((v1, v2, v4, v3))
     mesh.from_pydata(verts, [], faces)
-    
+
+    # Snap edge vertices to exact positions for perfect edge alignment
+    snap_terrain_edges(mesh, final_grid_scale, terrain_offset_x, terrain_offset_y, base_tile_size)
+
     bm = bmesh.new(); bm.from_mesh(mesh)
     uv_layer = bm.loops.layers.uv.verify()
     for face in bm.faces:
         for loop in face.loops:
-            # Account for Y coordinate inversion in UV mapping
-            # Since Y coordinates are inverted (256-y), we need to flip V coordinate
-            u = loop.vert.co.x / (256 * final_grid_scale)
-            v = 1.0 - (loop.vert.co.y / (256 * final_grid_scale))  # Flip V coordinate
+            # UV mapping accounting for terrain offset
+            # Map relative position within the tile to UV coordinates (0-1)
+            rel_x = loop.vert.co.x - terrain_offset_x
+            rel_y = loop.vert.co.y - terrain_offset_y
+            u = rel_x / base_tile_size  # Use base tile size for UV mapping
+            v = 1.0 - (rel_y / base_tile_size)  # Flipped for texture orientation
             loop[uv_layer].uv = (u, v)
     bm.to_mesh(mesh); bm.free()
 
@@ -565,7 +983,7 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     # Create water plane based on original Delphi 7 water feature (always create for every KCM)
     water_obj = None
     try:
-        water_obj = create_water_plane(kcm, map_x, map_y, final_grid_scale, final_height_scale, terrain_offset_x, terrain_offset_y)
+        water_obj = create_water_plane(kcm, map_x, map_y, final_grid_scale, final_height_scale, terrain_offset_x, terrain_offset_y, terrain_offset_z)
         if water_obj:
             print(f"Successfully created water plane for KCM {map_x}_{map_y}")
         else:
@@ -607,6 +1025,11 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
 
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
+
+    # Lock transform properties to prevent accidental modification
+    lock_kcm_transform_properties(obj)
+    if water_obj:
+        lock_kcm_transform_properties(water_obj)
 
     # Apply mesh smoothing and auto smooth shading for better terrain appearance
     bpy.context.view_layer.objects.active = obj
