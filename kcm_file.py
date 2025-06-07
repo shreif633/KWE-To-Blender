@@ -361,9 +361,56 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     kcm_collection.objects.link(obj)
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
+
+    # Apply mesh smoothing and auto smooth shading for better terrain appearance
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+
+    # Set object to smooth shading (works in all Blender versions)
+    bpy.ops.object.shade_smooth()
+
+    # Apply auto smooth using modern Blender API (Blender 4.1+) or legacy method
+    try:
+        # Modern Blender 4.1+ method using modifier
+        auto_smooth_modifier = obj.modifiers.new(name="AutoSmooth", type='SMOOTH')
+        auto_smooth_modifier.angle = 1.0472  # 60 degrees in radians
+        auto_smooth_modifier.use_smooth_shade = True
+        print("Applied auto smooth using modern modifier")
+    except:
+        # Legacy method for older Blender versions
+        try:
+            mesh.use_auto_smooth = True
+            mesh.auto_smooth_angle = 1.0472  # 60 degrees in radians
+            print("Applied auto smooth using legacy method")
+        except AttributeError:
+            print("Auto smooth not available, using shade smooth only")
+
+    # Apply actual mesh smoothing to geometry (smooth faces, edges, vertices)
+    try:
+        # Enter edit mode and smooth the mesh geometry
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+
+        # Apply Laplacian smooth to actually smooth the mesh geometry
+        bpy.ops.mesh.vertices_smooth_laplacian(iterations=2, lambda_factor=0.5, lambda_border=0.5)
+
+        # Also apply regular smooth for additional smoothing
+        bpy.ops.mesh.vertices_smooth(factor=0.5, repeat=1)
+
+        # Return to object mode
+        bpy.ops.object.mode_set(mode='OBJECT')
+        print("Applied mesh geometry smoothing")
+    except Exception as e:
+        print(f"Mesh smoothing failed: {e}")
+        # Ensure we're back in object mode
+        try:
+            bpy.ops.object.mode_set(mode='OBJECT')
+        except:
+            pass
+
     mesh.update(); mesh.validate()
 
-    print(f"Added {mesh_name} to collection '{collection_name}'")
+    print(f"Added {mesh_name} to collection '{collection_name}' with mesh smoothing and auto smooth shading")
 
 def apply_greyscale_map(mesh, map_data, layer_name):
     if mesh.vertex_colors.get(layer_name): vcol_layer = mesh.vertex_colors[layer_name]

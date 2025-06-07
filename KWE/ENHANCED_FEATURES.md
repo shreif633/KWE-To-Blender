@@ -19,6 +19,7 @@
   - **Correct Y coordinate inversion** - Y coordinates inverted like original (lines 3085-3087: `256-(position[1]*256)`)
   - **Proper face winding** - Face creation accounts for coordinate system changes
   - **Fixed UV mapping** - UV coordinates corrected for Y inversion to prevent texture flipping
+  - **Mesh smoothing and auto smooth** - Actual geometry smoothing plus auto smooth (compatible with all Blender versions)
   - **Original rotation handling** - Maintains correct X, Y, Z orientation from Delphi 7
   - **Source code references** - Based on actual Delphi 7 source code analysis from Unit1.pas and KalClientMap.pas
   - **Enhanced 8x texture scaling** - All texture X and Y scales multiplied by 8 for better detail
@@ -215,6 +216,19 @@ world_y = ((256 - y) * final_grid_scale) + terrain_offset_y  # Y: inverted like 
 # UV mapping correction for coordinate inversion
 u = loop.vert.co.x / (256 * final_grid_scale)               # U: direct
 v = 1.0 - (loop.vert.co.y / (256 * final_grid_scale))       # V: flipped to correct texture orientation
+
+# Mesh smoothing and auto smooth shading (compatible with all Blender versions)
+bpy.ops.object.shade_smooth()                              # Apply smooth shading
+
+# Auto smooth - modern method (Blender 4.1+) or legacy fallback
+try:
+    auto_smooth_modifier = obj.modifiers.new("AutoSmooth", "SMOOTH")  # Modern method
+except:
+    mesh.use_auto_smooth = True; mesh.auto_smooth_angle = 1.0472      # Legacy method
+
+# Actual mesh geometry smoothing
+bpy.ops.mesh.vertices_smooth_laplacian(iterations=2, lambda_factor=0.5)  # Laplacian smooth
+bpy.ops.mesh.vertices_smooth(factor=0.5, repeat=1)                      # Regular smooth
 
 # Default import parameters (original scale)
 terrain_scale: default=1.0  # No automatic reduction
