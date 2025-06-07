@@ -168,21 +168,35 @@ class IMPORT_OT_kal_kcm(bpy.types.Operator, ImportHelper):
 
                 if map_layout:
                     # Create map overview object
-                    kcm_file.create_map_overview_object(map_layout, self.terrain_scale)
+                    try:
+                        kcm_file.create_map_overview_object(map_layout, self.terrain_scale)
+                    except Exception as overview_error:
+                        print(f"Warning: Could not create map overview: {overview_error}")
+                        # Continue without overview
             except AttributeError as e:
                 print(f"Function not found: {e}")
                 print("Skipping batch analysis - importing files individually")
+                map_layout = None
+            except Exception as e:
+                print(f"Batch analysis failed: {e}")
+                print("Continuing with individual imports")
                 map_layout = None
 
             # Import each file
             imported_count = 0
             failed_files = []
+            created_collections = []
 
             for filepath in filepaths:
                 try:
                     kcm_file.import_kcm(filepath, prefs.game_path, self.terrain_scale, self.height_scale)
                     imported_count += 1
-                    print(f"Successfully imported: {os.path.basename(filepath)}")
+
+                    # Track created collection
+                    kcm_filename = os.path.splitext(os.path.basename(filepath))[0]
+                    created_collections.append(kcm_filename)
+
+                    print(f"Successfully imported: {os.path.basename(filepath)} → Collection: {kcm_filename}")
                 except Exception as e:
                     failed_files.append(os.path.basename(filepath))
                     print(f"Failed to import {os.path.basename(filepath)}: {e}")
@@ -199,13 +213,24 @@ class IMPORT_OT_kal_kcm(bpy.types.Operator, ImportHelper):
             else:
                 self.report({'INFO'}, f"Successfully imported {imported_count} KCM tiles{map_size_info}")
 
-            # Show positioning info for first few files
+            # Show created collections and positioning info
+            if created_collections:
+                print(f"\nCreated {len(created_collections)} collections:")
+                for collection_name in created_collections:
+                    print(f"  - Collection: {collection_name}")
+
             kcm_objects = [obj for obj in bpy.data.objects if 'kcm_header' in obj]
             if kcm_objects:
-                print(f"Imported {len(kcm_objects)} KCM terrains:")
-                for obj in kcm_objects[:5]:  # Show first 5
+                print(f"\nImported {len(kcm_objects)} KCM terrains:")
+                for obj in kcm_objects[-imported_count:]:  # Show the newly imported ones
                     header = obj['kcm_header']
-                    print(f"  - {obj.name}: Map({header['map_x']},{header['map_y']}) at {obj.location}")
+                    # Find which collection this object is in
+                    obj_collection = "Unknown"
+                    for collection in bpy.data.collections:
+                        if obj.name in collection.objects:
+                            obj_collection = collection.name
+                            break
+                    print(f"  - {obj.name}: Map({header['map_x']},{header['map_y']}) in Collection '{obj_collection}'")
         else:
             # Import single KCM file
             try:
@@ -656,7 +681,9 @@ class KAL_PT_texture_panel(bpy.types.Panel):
         # Header info
         box = layout.box()
         box.label(text=f"Terrain: {obj.name}", icon='MESH_PLANE')
-        box.operator(KAL_OT_refresh_textures.bl_idname, text="Refresh Textures", icon='FILE_REFRESH')
+        row = box.row(align=True)
+        row.operator(KAL_OT_refresh_textures.bl_idname, text="Refresh", icon='FILE_REFRESH')
+        row.operator(KAL_OT_enable_texture_paint.bl_idname, text="Paint Mode", icon='BRUSH_DATA')
 
         # Texture list
         box = layout.box()
@@ -789,13 +816,21 @@ class KAL_PT_map_manager(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
 
-        # Count KCM objects in scene
+        # Count KCM objects and collections in scene
         kcm_objects = [obj for obj in bpy.data.objects if 'kcm_header' in obj]
         overview_objects = [obj for obj in bpy.data.objects if 'map_layout' in obj]
+
+        # Count KCM collections (collections that contain KCM objects)
+        kcm_collections = []
+        for collection in bpy.data.collections:
+            has_kcm = any('kcm_header' in obj for obj in collection.objects)
+            if has_kcm:
+                kcm_collections.append(collection.name)
 
         box = layout.box()
         box.label(text="Scene Map Status:", icon='WORLD')
         box.label(text=f"KCM Terrains: {len(kcm_objects)}")
+        box.label(text=f"KCM Collections: {len(kcm_collections)}")
         box.label(text=f"Map Overviews: {len(overview_objects)}")
 
         if kcm_objects:
@@ -824,6 +859,23 @@ class KAL_PT_map_manager(bpy.types.Panel):
             if len(kcm_objects) > 10:
                 box.label(text=f"... and {len(kcm_objects) - 10} more terrains")
 
+        # Show KCM collections
+        if kcm_collections:
+            box = layout.box()
+            box.label(text="KCM Collections:", icon='OUTLINER_COLLECTION')
+
+            for i, collection_name in enumerate(kcm_collections[:10]):  # Show first 10
+                row = box.row()
+                row.label(text=f"{collection_name}")
+
+                # Count objects in this collection
+                collection = bpy.data.collections[collection_name]
+                kcm_count = len([obj for obj in collection.objects if 'kcm_header' in obj])
+                row.label(text=f"({kcm_count} terrain{'s' if kcm_count != 1 else ''})")
+
+            if len(kcm_collections) > 10:
+                box.label(text=f"... and {len(kcm_collections) - 10} more collections")
+
         # Map management tools
         box = layout.box()
         box.label(text="Map Tools:", icon='TOOL_SETTINGS')
@@ -841,6 +893,46 @@ class KAL_PT_map_manager(bpy.types.Panel):
         box.label(text="Select multiple .kcm files for auto-positioning")
 
 
+class KAL_OT_enable_texture_paint(bpy.types.Operator):
+    """Enable texture paint mode for editing terrain blend maps"""
+    bl_idname = "kal.enable_texture_paint"
+    bl_label = "Enable Texture Paint"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = context.active_object
+
+        if not obj or 'kcm_header' not in obj:
+            self.report({'ERROR'}, "Please select a KCM terrain object")
+            return {'CANCELLED'}
+
+        try:
+            # Setup texture paint slots
+            kcm_file.setup_texture_paint_slots(obj)
+
+            # Enable texture paint mode
+            if kcm_file.enable_texture_paint_mode(obj):
+                self.report({'INFO'}, f"Texture paint mode enabled for {obj.name}")
+
+                # Show helpful info
+                mat = obj.data.materials[0] if obj.data.materials else None
+                if mat:
+                    slot_count = len(mat.texture_paint_slots)
+                    if slot_count > 0:
+                        self.report({'INFO'}, f"Ready to paint {slot_count} blend layers")
+                    else:
+                        self.report({'WARNING'}, "No blend maps found to paint")
+            else:
+                self.report({'ERROR'}, "Failed to enable texture paint mode")
+                return {'CANCELLED'}
+
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to setup texture painting: {str(e)}")
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
+
+
 # --- Registration ---
 classes = (
     KalToolsPreferences,
@@ -856,6 +948,7 @@ classes = (
     KAL_OT_refresh_textures,
     KAL_OT_convert_all_gtx,
     KAL_OT_replace_texture_from_env,
+    KAL_OT_enable_texture_paint,
     KAL_PT_main_panel,
     KAL_PT_texture_panel,
     KAL_PT_env_texture_browser,

@@ -271,12 +271,32 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     for i, tex_map in enumerate(kcm.texturemaps):
         if tex_map is not None: apply_greyscale_map(mesh, tex_map, f"BlendMap_{i}")
     
-    create_terrain_material(obj, kcm, game_path)
+    try:
+        create_terrain_material(obj, kcm, game_path)
+    except Exception as e:
+        print(f"Failed to create terrain material: {e}")
+        import traceback
+        traceback.print_exc()
 
-    bpy.context.collection.objects.link(obj)
+    # Create collection for this KCM file based on filename
+    kcm_filename = os.path.splitext(os.path.basename(filepath))[0]  # Get filename without extension
+    collection_name = kcm_filename
+
+    # Create collection if it doesn't exist
+    if collection_name not in bpy.data.collections:
+        kcm_collection = bpy.data.collections.new(collection_name)
+        bpy.context.scene.collection.children.link(kcm_collection)
+        print(f"Created collection: {collection_name}")
+    else:
+        kcm_collection = bpy.data.collections[collection_name]
+
+    # Add object to the KCM-specific collection instead of scene collection
+    kcm_collection.objects.link(obj)
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
     mesh.update(); mesh.validate()
+
+    print(f"Added {mesh_name} to collection '{collection_name}'")
 
 def apply_greyscale_map(mesh, map_data, layer_name):
     if mesh.vertex_colors.get(layer_name): vcol_layer = mesh.vertex_colors[layer_name]
@@ -295,6 +315,7 @@ def apply_greyscale_map(mesh, map_data, layer_name):
                 vcol_layer.data[loop_index].color = (r / 255.0, g / 255.0, b / 255.0, 1.0)
 
 def create_terrain_material(obj, kcm, game_path):
+    """Create multi-layer terrain material like original Kal World Editor"""
     env_data = EnvFileData()
 
     # Use path helpers to get correct ENV file path
@@ -305,9 +326,12 @@ def create_terrain_material(obj, kcm, game_path):
 
     env_data.load(env_path)
 
-    # Store texture info in object for later editing
+    # Store texture info in object for later editing (only basic types allowed in ID properties)
+    # Convert numpy integers to regular Python integers for Blender compatibility
+    texture_list_converted = [int(x) for x in kcm.header['texture_list']]
+
     obj['kcm_textures'] = {
-        'texture_list': kcm.header['texture_list'],
+        'texture_list': texture_list_converted,
         'env_textures': env_data.texture_index_list,
         'game_path': game_path
     }
@@ -321,128 +345,254 @@ def create_terrain_material(obj, kcm, game_path):
     # Create main nodes
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
     output = nodes.new("ShaderNodeOutputMaterial")
-    bsdf.location, output.location = (800, 0), (1000, 0)
+    bsdf.location, output.location = (1200, 0), (1400, 0)
 
     # Texture coordinate node
     tex_coord = nodes.new("ShaderNodeTexCoord")
-    tex_coord.location = (-1400, 400)
+    tex_coord.location = (-800, 400)
 
     # Mapping node for texture scaling
     mapping = nodes.new("ShaderNodeMapping")
-    mapping.location = (-1200, 400)
-    mapping.inputs['Scale'].default_value = (1.0, 1.0, 1.0)  # Can be adjusted for texture tiling
+    mapping.location = (-600, 400)
+    mapping.inputs['Scale'].default_value = (1.0, 1.0, 1.0)
     links.new(tex_coord.outputs['UV'], mapping.inputs['Vector'])
 
-    # Load and setup texture nodes
-    texture_nodes = []
-    last_color_socket = None
-    node_x, node_y = -800, 600
-
-    for i, tex_idx in enumerate(kcm.header['texture_list']):
-        if tex_idx == 255: continue
-
-        # Load texture image
-        img = None
-        texture_name = f"Unknown_Texture_{tex_idx}"
-
-        if tex_idx < len(env_data.texture_index_list):
-            gtx_name = env_data.texture_index_list[tex_idx]
-            texture_name = gtx_name.replace('.gtx', '')
-
-            # Use path helpers to get correct texture folder and DDS output paths
-            texture_folder = get_texture_folder_path(game_path)
-            if not texture_folder:
-                print(f"Texture folder not found. Check paths in addon preferences.")
-                continue
-
-            gtx_path = os.path.join(texture_folder, gtx_name)
-            dds_output_dir = get_dds_output_path()
-            dds_path = os.path.join(dds_output_dir, gtx_name.replace('.gtx', '.dds'))
-
-            # Convert GTX to DDS if needed
-            if not os.path.exists(dds_path):
-                if convert_gtx_to_dds(gtx_path, dds_path, game_path):
-                    print(f"Converted {gtx_name} to DDS")
-                else:
-                    print(f"Failed to convert {gtx_name}")
-
-            # Load the DDS image
-            if os.path.exists(dds_path):
-                try:
-                    img = bpy.data.images.load(dds_path)
-                    img.name = f"KCM_Tex_{i}_{texture_name}"
-                    # Ensure texture displays correctly in viewport
-                    img.colorspace_settings.name = 'sRGB'
-                except Exception as e:
-                    print(f"Failed to load texture {dds_path}: {e}")
-
-        # Create texture node
-        tex_node = nodes.new('ShaderNodeTexImage')
-        tex_node.name = f"Texture_{i}"
-        tex_node.label = f"Tex {i}: {texture_name}"
-        tex_node.image = img
-        tex_node.location = (node_x, node_y)
-
-        # Connect UV mapping
-        links.new(mapping.outputs['Vector'], tex_node.inputs['Vector'])
-
-        # Set texture interpolation for better quality
-        if img:
-            tex_node.interpolation = 'Linear'
-
-        texture_nodes.append(tex_node)
-
-        # Handle texture blending
-        if i == 0:
-            # First texture is the base
-            last_color_socket = tex_node.outputs['Color']
-        else:
-            # Create blend map node for this texture
-            blend_map_node = nodes.new('ShaderNodeVertexColor')
-            blend_map_node.layer_name = f"BlendMap_{i-1}"
-            blend_map_node.location = (node_x, node_y - 200)
-
-            # Create mix node for blending
-            mix_node = nodes.new('ShaderNodeMixRGB')
-            mix_node.blend_type = 'MIX'
-            mix_node.location = (node_x + 300, node_y - 100)
-
-            # Connect the blend
-            links.new(last_color_socket, mix_node.inputs['Color1'])
-            links.new(tex_node.outputs['Color'], mix_node.inputs['Color2'])
-            links.new(blend_map_node.outputs['Color'], mix_node.inputs['Fac'])
-
-            last_color_socket = mix_node.outputs['Color']
-
-        node_y -= 400
-
-    # Apply colormap multiplication
-    colormap_node = nodes.new('ShaderNodeVertexColor')
-    colormap_node.layer_name = "Colormap_RGB"
-    colormap_node.location = (200, -300)
-
-    # Final color mixing
-    final_mix = nodes.new('ShaderNodeMixRGB')
-    final_mix.blend_type = 'MULTIPLY'
-    final_mix.inputs['Fac'].default_value = 1.0
-    final_mix.location = (500, 0)
-
-    if last_color_socket:
-        links.new(last_color_socket, final_mix.inputs['Color1'])
-    links.new(colormap_node.outputs['Color'], final_mix.inputs['Color2'])
-    links.new(final_mix.outputs['Color'], bsdf.inputs['Base Color'])
+    # Create multi-layer texture blending system (pass KCM data directly)
+    create_multi_layer_texture_system(mat, kcm, env_data, game_path)
 
     # Connect to output
     links.new(bsdf.outputs['BSDF'], output.inputs['Surface'])
 
-    # Set material properties for better viewport display
-    mat.use_backface_culling = False
-    mat.show_transparent_back = False
-
-    print(f"Created material with {len(texture_nodes)} textures for {obj.name}")
+    # Setup texture paint slots for editing
+    setup_texture_paint_slots(obj)
 
     # Set viewport shading to show textures properly
     setup_viewport_for_textures()
+
+    print(f"Created multi-layer terrain material for {obj.name}")
+
+
+def create_multi_layer_texture_system(mat, kcm, env_data, game_path):
+    """Create the multi-layer texture blending system like original Kal World Editor"""
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    print(f"Creating multi-layer texture system...")
+    print(f"Texture list: {kcm.header['texture_list']}")
+
+    # Count available texture maps safely
+    available_maps = 0
+    for tm in kcm.texturemaps:
+        if tm is not None:
+            available_maps += 1
+    print(f"Available texturemaps: {available_maps}")
+
+    # Get texture paths
+    texture_folder = get_texture_folder_path(game_path)
+    dds_output_dir = get_dds_output_path()
+
+    if not texture_folder:
+        print("Texture folder not found. Check paths in addon preferences.")
+        return
+
+    # Find mapping node
+    mapping = nodes.get("Mapping")
+    if not mapping:
+        print("Mapping node not found")
+        return
+
+    # Create texture layers
+    texture_layers = []
+    blend_maps = []
+
+    for i, tex_idx in enumerate(kcm.header['texture_list']):
+        if tex_idx == 255:
+            print(f"Skipping texture slot {i} (unused)")
+            continue
+
+        print(f"Processing texture slot {i}, index {tex_idx}")
+
+        # Load texture
+        texture_node = create_texture_layer(nodes, links, mapping, i, tex_idx, env_data, texture_folder, dds_output_dir, game_path)
+        if texture_node:
+            texture_layers.append(texture_node)
+
+            # Create blend map from KCM texture map data
+            if i < len(kcm.texturemaps) and kcm.texturemaps[i] is not None:
+                print(f"Creating blend map for texture {i}")
+                blend_map = create_blend_map_image(kcm.texturemaps[i], f"BlendMap_{i}")
+                if blend_map:
+                    blend_node = create_blend_map_node(nodes, links, mapping, blend_map, i)
+                    blend_maps.append(blend_node)
+                    print(f"Created blend map node for texture {i}")
+                else:
+                    print(f"Failed to create blend map image for texture {i}")
+                    blend_maps.append(None)
+            else:
+                print(f"No texture map data for texture {i}")
+                blend_maps.append(None)
+        else:
+            print(f"Failed to create texture layer {i}")
+
+    # Count blend maps safely
+    blend_map_count = 0
+    for bm in blend_maps:
+        if bm is not None:
+            blend_map_count += 1
+
+    print(f"Created {len(texture_layers)} texture layers and {blend_map_count} blend maps")
+
+    # Create blending chain
+    if texture_layers:
+        final_color = create_texture_blend_chain(nodes, links, texture_layers, blend_maps)
+
+        # Connect to BSDF
+        bsdf = nodes.get("Principled BSDF")
+        if bsdf and final_color:
+            links.new(final_color, bsdf.inputs['Base Color'])
+            print("Connected final blended color to material")
+        else:
+            print("Failed to connect to BSDF - using first texture only")
+            if texture_layers:
+                links.new(texture_layers[0].outputs['Color'], bsdf.inputs['Base Color'])
+    else:
+        print("No texture layers created")
+
+
+def create_texture_layer(nodes, links, mapping, layer_index, tex_idx, env_data, texture_folder, dds_output_dir, game_path):
+    """Create a single texture layer"""
+    if tex_idx >= len(env_data.texture_index_list):
+        return None
+
+    gtx_name = env_data.texture_index_list[tex_idx]
+    texture_name = gtx_name.replace('.gtx', '')
+
+    # Convert GTX to DDS if needed
+    gtx_path = os.path.join(texture_folder, gtx_name)
+    dds_path = os.path.join(dds_output_dir, gtx_name.replace('.gtx', '.dds'))
+
+    if not os.path.exists(dds_path) and os.path.exists(gtx_path):
+        if convert_gtx_to_dds(gtx_path, dds_path, game_path):
+            print(f"Converted {gtx_name} to DDS")
+        else:
+            print(f"Failed to convert {gtx_name}")
+            return None
+
+    if not os.path.exists(dds_path):
+        print(f"Texture not found: {gtx_name}")
+        return None
+
+    # Create texture node
+    tex_node = nodes.new('ShaderNodeTexImage')
+    tex_node.name = f"Texture_{layer_index}"
+    tex_node.label = f"Layer {layer_index}: {texture_name}"
+    tex_node.location = (-400, -layer_index * 300)
+
+    # Load image
+    try:
+        img = bpy.data.images.load(dds_path)
+        img.name = f"KCM_Tex_{layer_index}_{texture_name}"
+        img.colorspace_settings.name = 'sRGB'
+        tex_node.image = img
+        tex_node.interpolation = 'Linear'
+
+        # Connect UV mapping
+        links.new(mapping.outputs['Vector'], tex_node.inputs['Vector'])
+
+        print(f"Created texture layer {layer_index}: {texture_name}")
+        return tex_node
+
+    except Exception as e:
+        print(f"Failed to load texture {dds_path}: {e}")
+        return None
+
+
+def create_blend_map_image(texture_map_data, name):
+    """Create a Blender image from KCM texture map data (256x256 grayscale)"""
+    if texture_map_data is None:
+        return None
+
+    try:
+        print(f"Creating blend map image: {name}")
+        print(f"  Texture map data type: {type(texture_map_data)}")
+        print(f"  Texture map data shape: {texture_map_data.shape if hasattr(texture_map_data, 'shape') else 'No shape'}")
+
+        # Create new image
+        img = bpy.data.images.new(name, width=256, height=256, alpha=False)
+
+        # Convert texture map data to image pixels
+        # KCM texture maps are 256x256 arrays with values 0-255
+        pixels = []
+        for y in range(256):
+            for x in range(256):
+                try:
+                    # Get grayscale value (0-255) and convert to 0-1 range
+                    value = float(texture_map_data[x][y]) / 255.0
+                    # RGB + Alpha (grayscale, so R=G=B)
+                    pixels.extend([value, value, value, 1.0])
+                except Exception as pixel_error:
+                    print(f"Error processing pixel ({x}, {y}): {pixel_error}")
+                    # Use default gray value
+                    pixels.extend([0.5, 0.5, 0.5, 1.0])
+
+        # Set pixels
+        img.pixels = pixels
+        img.pack()  # Pack into blend file
+
+        print(f"Successfully created blend map image: {name}")
+        return img
+
+    except Exception as e:
+        print(f"Failed to create blend map {name}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def create_blend_map_node(nodes, links, mapping, blend_image, layer_index):
+    """Create a blend map texture node"""
+    blend_node = nodes.new('ShaderNodeTexImage')
+    blend_node.name = f"BlendMap_{layer_index}"
+    blend_node.label = f"Blend {layer_index}"
+    blend_node.location = (-400, -layer_index * 300 - 150)
+    blend_node.image = blend_image
+    blend_node.interpolation = 'Linear'
+
+    # Connect UV mapping
+    links.new(mapping.outputs['Vector'], blend_node.inputs['Vector'])
+
+    return blend_node
+
+
+def create_texture_blend_chain(nodes, links, texture_layers, blend_maps):
+    """Create the texture blending chain like original Kal World Editor"""
+    if not texture_layers:
+        return None
+
+    # Start with first texture as base
+    current_color = texture_layers[0].outputs['Color']
+
+    # Blend each subsequent layer
+    for i in range(1, len(texture_layers)):
+        if i < len(blend_maps) and blend_maps[i]:
+            # Create mix node for blending
+            mix_node = nodes.new('ShaderNodeMixRGB')
+            mix_node.name = f"Mix_{i}"
+            mix_node.label = f"Blend Layer {i}"
+            mix_node.location = (0, -i * 200)
+            mix_node.blend_type = 'MIX'
+
+            # Connect textures and blend map
+            links.new(current_color, mix_node.inputs['Color1'])  # Base
+            links.new(texture_layers[i].outputs['Color'], mix_node.inputs['Color2'])  # New layer
+            links.new(blend_maps[i].outputs['Color'], mix_node.inputs['Fac'])  # Blend factor
+
+            current_color = mix_node.outputs['Color']
+        else:
+            # No blend map, just use the texture directly (shouldn't happen in normal KCM files)
+            current_color = texture_layers[i].outputs['Color']
+
+    return current_color
 
 
 def setup_viewport_for_textures():
@@ -788,15 +938,8 @@ def create_map_overview_object(map_layout, terrain_grid_scale):
 
     bounds = map_layout['map_bounds']
 
-    # Create a simple plane for each map tile
+    # Create a simple plane for map overview
     overview_name = f"Map_Overview_{bounds['width']}x{bounds['height']}"
-
-    # Create collection for organization
-    if overview_name not in bpy.data.collections:
-        overview_collection = bpy.data.collections.new(overview_name)
-        bpy.context.scene.collection.children.link(overview_collection)
-    else:
-        overview_collection = bpy.data.collections[overview_name]
 
     # Create overview plane
     bpy.ops.mesh.primitive_plane_add(
@@ -816,9 +959,24 @@ def create_map_overview_object(map_layout, terrain_grid_scale):
         1
     )
 
-    # Move to overview collection
-    bpy.context.scene.collection.objects.unlink(overview_obj)
-    overview_collection.objects.link(overview_obj)
+    # Create a simple material to make it visible
+    mat = bpy.data.materials.new(name=f"{overview_name}_Material")
+    mat.use_nodes = True
+    mat.node_tree.nodes.clear()
+
+    # Add emission shader for visibility
+    emission = mat.node_tree.nodes.new(type='ShaderNodeEmission')
+    emission.inputs['Color'].default_value = (0.2, 0.5, 1.0, 0.3)  # Light blue, semi-transparent
+    emission.inputs['Strength'].default_value = 0.5
+
+    output = mat.node_tree.nodes.new(type='ShaderNodeOutputMaterial')
+    mat.node_tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
+
+    # Enable transparency
+    mat.blend_method = 'BLEND'
+
+    # Assign material
+    overview_obj.data.materials.append(mat)
 
     # Add custom properties
     overview_obj['map_layout'] = {
@@ -834,15 +992,76 @@ def create_map_overview_object(map_layout, terrain_grid_scale):
 
 
 def setup_texture_paint_slots(obj):
-    if not obj.data.materials or not obj.data.materials[0]: return
-    mat = obj.data.materials[0]; mat.paint_settings.image_paint_source = 'VERTEX_COLOR'
-    for i in range(len(mat.texture_paint_slots)): mat.texture_paint_slots.clear()
+    """Setup texture paint slots for editing blend maps with brush tools"""
+    if not obj or not obj.data.materials:
+        return
+
+    mat = obj.data.materials[0]
+    if not mat or not mat.use_nodes:
+        return
+
+    print(f"Setting up texture paint slots for {obj.name}")
+
+    # Clear existing paint slots
+    while len(mat.texture_paint_slots) > 0:
+        mat.texture_paint_slots.remove(mat.texture_paint_slots[0])
+
+    # Create paint slots for each blend map image
+    paint_slot_count = 0
+
     for i in range(7):
-        layer_name = f"BlendMap_{i}"
-        if layer_name in obj.data.vertex_colors:
-            slot = mat.texture_paint_slots.add()
-            slot.uv_layer = obj.data.uv_layers.active.name
-            slot.vertex_color_layer = layer_name
+        # Find blend map node
+        blend_node = mat.node_tree.nodes.get(f"BlendMap_{i}")
+        if blend_node and blend_node.image:
+            try:
+                # Add texture paint slot
+                slot = mat.texture_paint_slots.add()
+                slot.name = f"Blend Layer {i}"
+
+                # Make image editable and keep it in memory
+                blend_node.image.use_fake_user = True
+
+                paint_slot_count += 1
+                print(f"Created paint slot for blend layer {i}")
+
+            except Exception as e:
+                print(f"Failed to create paint slot for layer {i}: {e}")
+
+    # Setup UV map for painting
+    if obj.data.uv_layers:
+        obj.data.uv_layers.active = obj.data.uv_layers[0]
+
+    print(f"Created {paint_slot_count} texture paint slots")
+
+
+def enable_texture_paint_mode(obj):
+    """Enable texture paint mode for editing terrain textures"""
+    if not obj:
+        return False
+
+    try:
+        # Set active object
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+
+        # Switch to texture paint mode
+        if bpy.context.mode != 'PAINT_TEXTURE':
+            bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+
+        # Configure brush settings for terrain painting
+        if hasattr(bpy.context.tool_settings, 'image_paint'):
+            brush = bpy.context.tool_settings.image_paint.brush
+            if brush:
+                brush.size = 50  # Medium brush size
+                brush.strength = 0.5  # Medium strength
+                brush.blend = 'MIX'  # Standard blending
+
+        print(f"Enabled texture paint mode for {obj.name}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to enable texture paint mode: {e}")
+        return False
 
 # --- KCM Export Logic ---
 def export_kcm(filepath, obj, game_path):

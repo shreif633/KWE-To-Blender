@@ -18,14 +18,16 @@
   - Path validation with helpful error messages and file counts
   - Override capability for custom folder structures
 
-### 2. **Multiple KCM Import with Map Tile Positioning** ✅
-- **Location**: `__init__.py` lines 127-191 and `kcm_file.py` lines 223-262
+### 2. **Multiple KCM Import with Named Collections** ✅
+- **Location**: `__init__.py` lines 127-233 and `kcm_file.py` lines 274-294
 - **Features**:
   - Import multiple KCM files at once as positioned map tiles
+  - **Each KCM file creates its own collection** named after the filename (e.g., `n_031_039`)
   - Automatic positioning based on X,Y coordinates from KCM headers
   - Map layout analysis and overview creation
   - Batch processing with progress reporting
   - Connected terrain tiles forming complete maps
+  - Organized outliner with separate collections for each terrain
 
 ### 3. **5% Terrain Scaling** ✅
 - **Location**: `kcm_file.py` lines 227-228
@@ -41,14 +43,17 @@
   - Better error handling and debugging
   - Shows grass types and texture counts
 
-### 3. **Real Texture Display** ✅
-- **Location**: `kcm_file.py` lines 164-303
+### 3. **Multi-Layer Texture System with Brush Editing** ✅
+- **Location**: `kcm_file.py` lines 312-534 and `__init__.py` lines 893-932
 - **Features**:
-  - Enhanced material creation with proper shader nodes
-  - Automatic GTX to DDS conversion
-  - High-quality texture interpolation
-  - Multi-texture blending support
-  - Automatic viewport configuration
+  - **Multi-layer texture blending** exactly like original Kal World Editor
+  - **Blend map creation** from KCM texture map data (256x256 grayscale images)
+  - **Natural texture layering** with proper opacity blending between layers
+  - **Texture paint mode support** for editing blend maps with Blender's brush tools
+  - **Real-time preview** of texture changes in viewport
+  - **Paint slots** for each texture layer for easy editing
+  - **Enhanced material creation** with proper shader node setup
+  - **Automatic GTX to DDS conversion** and high-quality interpolation
 
 ### 4. **ENV Texture Browser** ✅
 - **Location**: `__init__.py` lines 376-454
@@ -111,10 +116,12 @@ Before using any features, you MUST update the file paths in the test script and
 ### **Import Multiple KCM Files as Map Tiles:**
 1. **File > Import > Kal Online Map (.kcm)**
 2. **Check "Import Multiple KCM Files"**
-3. Select multiple .kcm files (e.g., 0_0.kcm, 0_1.kcm, 1_0.kcm, etc.)
-4. Files will be automatically positioned based on their X,Y coordinates
-5. Creates a connected map with proper tile positioning
-6. Generates map overview object showing layout
+3. Select multiple .kcm files (e.g., n_031_039.kcm, n_031_040.kcm, n_032_039.kcm, etc.)
+4. **Each file creates its own collection** named after the filename (without .kcm extension)
+5. Files will be automatically positioned based on their X,Y coordinates
+6. Creates a connected map with proper tile positioning
+7. Generates map overview object showing layout
+8. **Organized outliner** with separate collections for easy management
 
 ### **Browse and Replace Textures:**
 1. **Select a KCM terrain object**
@@ -122,6 +129,19 @@ Before using any features, you MUST update the file paths in the test script and
 3. **Use ENV Texture Browser** to see all available textures
 4. **Click texture names** to replace terrain textures
 5. **Convert GTX to DDS** automatically when needed
+
+### **Edit Texture Blend Maps with Brush Tools:**
+1. **Select a KCM terrain object** with multiple texture layers
+2. **Go to KCM Texture Manager panel** in 3D Viewport sidebar
+3. **Click "Paint Mode"** to enable texture painting
+4. **Switch to Texture Paint workspace** for better brush tools
+5. **Use Blender's brush tools** to paint blend maps:
+   - **Brush Size**: Adjust for area coverage
+   - **Strength**: Control blend intensity
+   - **Falloff**: Smooth or hard edges
+6. **Paint in white** to show more of a texture layer
+7. **Paint in black** to hide a texture layer
+8. **See changes in real-time** in Material Preview mode
 
 ### **ENV Texture Browser:**
 1. Open "ENV Texture Browser" panel in 3D viewport sidebar
