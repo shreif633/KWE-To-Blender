@@ -242,6 +242,221 @@ class EnvFileData:
             import traceback
             traceback.print_exc()
 
+def create_water_plane(kcm, map_x, map_y, final_grid_scale, final_height_scale, terrain_offset_x, terrain_offset_y):
+    """Create water plane based on original Delphi 7 water feature implementation"""
+    # Always create water plane for every KCM import (single or multiple)
+    # Based on original CreateWater procedure that creates a simple plane at Y=0 covering 256x256 area
+
+    water_level_height = 0  # Water plane height (Y=0 in original Delphi coordinates)
+
+    # Optional: Check terrain height for informational purposes
+    water_height_threshold = 1580  # Height threshold from original Delphi 7 source
+    low_areas_count = 0
+    min_height = float('inf')
+    max_height = float('-inf')
+
+    for y in range(257):
+        for x in range(257):
+            height = kcm.heightmap[x, y]
+            min_height = min(min_height, height)
+            max_height = max(max_height, height)
+            if height < water_height_threshold:
+                low_areas_count += 1
+
+    print(f"Terrain height analysis: Min={min_height}, Max={max_height}, Low areas (<{water_height_threshold}): {low_areas_count}")
+    print("Creating water plane for all terrain (always enabled)")
+
+    # Create water plane mesh covering the entire 256x256 terrain area
+    # Based on original Delphi 7 CreateWater procedure coordinates:
+    # p1.coord[0] := 0;   p1.coord[1] := 0;   p1.coord[2] := 0;
+    # p2.coord[0] := 255; p2.coord[1] := 0;   p2.coord[2] := 0;
+    # p3.coord[0] := 0;   p3.coord[1] := 0;   p3.coord[2] := 255;
+    # p4.coord[0] := 255; p4.coord[1] := 0;   p4.coord[2] := 255;
+
+    # Create unique water mesh name for both single and multiple imports
+    water_mesh_name = f"Water_{map_x:03d}_{map_y:03d}"  # Use zero-padded format for better sorting
+    water_mesh = bpy.data.meshes.new(name=water_mesh_name)
+    water_obj = bpy.data.objects.new(water_mesh_name, water_mesh)
+
+    # Store water metadata for identification
+    water_obj['is_kcm_water'] = True
+    water_obj['kcm_map_x'] = map_x
+    water_obj['kcm_map_y'] = map_y
+    water_obj['water_height_threshold'] = 1580
+
+    # Convert water level height using the same coordinate system as terrain
+    # In Delphi: Y=0 for water, in Blender this becomes Z coordinate
+    water_z = water_level_height * final_height_scale
+
+    # Create water plane vertices (4 corners covering 256x256 area)
+    # Apply same coordinate mapping as terrain: Delphi Y → Blender Y (inverted)
+    water_verts = [
+        Vector((terrain_offset_x, terrain_offset_y + (256 * final_grid_scale), water_z)),  # p3: (0, 255)
+        Vector((terrain_offset_x + (256 * final_grid_scale), terrain_offset_y + (256 * final_grid_scale), water_z)),  # p4: (255, 255)
+        Vector((terrain_offset_x, terrain_offset_y, water_z)),  # p1: (0, 0)
+        Vector((terrain_offset_x + (256 * final_grid_scale), terrain_offset_y, water_z))   # p2: (255, 0)
+    ]
+
+    # Create water plane faces using same winding order as original Delphi 7
+    # Original face indices: (v3,v4,v2) and (v2,v1,v3) - creates two triangles
+    # For a single quad: (v1,v2,v4,v3) - counter-clockwise
+    water_faces = [(2, 3, 1, 0)]  # Single quad covering entire water area
+
+    water_mesh.from_pydata(water_verts, [], water_faces)
+
+    # Create water material with original Delphi 7 colors
+    # Original colors: col[0] := 1/255; col[1] := 100/255; col[2] := 255/255 (RGB)
+    try:
+        create_water_material(water_obj)
+    except Exception as e:
+        print(f"Warning: Failed to create water material for {water_obj.name}: {e}")
+        # Continue without material - water plane will still be created
+
+    water_mesh.update()
+    water_mesh.validate()
+
+    print(f"Created water plane: {water_mesh_name} at height {water_z:.3f}")
+    return water_obj
+
+
+def create_water_material(water_obj):
+    """Create water material based on original Delphi 7 water colors"""
+    # Check if a shared water material already exists for efficiency in multiple imports
+    shared_mat_name = "KCM_Water_Material"
+    if shared_mat_name in bpy.data.materials:
+        mat = bpy.data.materials[shared_mat_name]
+        water_obj.data.materials.append(mat)
+        print(f"Using existing shared water material for {water_obj.name}")
+        return
+
+    # Create new shared water material
+    mat = bpy.data.materials.new(name=shared_mat_name)
+    water_obj.data.materials.append(mat)
+
+    # Set water color based on original Delphi 7 values
+    # Original: col[0] := 1/255; col[1] := 100/255; col[2] := 255/255
+    water_color = (1.0/255.0, 100.0/255.0, 255.0/255.0, 1.0)  # RGBA
+
+    # Try to use nodes if available
+    try:
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        nodes.clear()
+
+        # Create material nodes
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        output = nodes.new("ShaderNodeOutputMaterial")
+        bsdf.location, output.location = (0, 0), (200, 0)
+
+        # Set basic properties that should exist in all Blender versions
+        bsdf.inputs['Base Color'].default_value = water_color
+
+        # Set safe properties
+        if 'Metallic' in bsdf.inputs:
+            bsdf.inputs['Metallic'].default_value = 0.0
+        if 'Roughness' in bsdf.inputs:
+            bsdf.inputs['Roughness'].default_value = 0.1  # Smooth water surface
+
+        # Handle optional properties with safe checks
+        for prop_name, value in [
+            ('Transmission', 0.8),
+            ('Alpha', 0.7),
+            ('IOR', 1.33),
+            ('Transmission Weight', 0.8),  # Blender 4.0+
+        ]:
+            try:
+                if prop_name in bsdf.inputs:
+                    bsdf.inputs[prop_name].default_value = value
+            except (KeyError, AttributeError, TypeError):
+                continue
+
+        # Connect nodes safely
+        try:
+            mat.node_tree.links.new(bsdf.outputs['BSDF'], output.inputs['Surface'])
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"Node setup failed, using basic material: {e}")
+        # Fallback to basic material properties
+        mat.use_nodes = False
+
+    # Set material transparency properties
+    try:
+        mat.blend_method = 'BLEND'
+        mat.use_backface_culling = False
+    except AttributeError:
+        # Fallback for older Blender versions
+        try:
+            mat.use_transparency = True
+            mat.transparency_method = 'Z_TRANSPARENCY'
+            mat.alpha = 0.7
+        except AttributeError:
+            pass
+
+    # Set basic material color as fallback
+    try:
+        mat.diffuse_color = water_color
+    except AttributeError:
+        pass
+
+    print(f"Created shared water material '{shared_mat_name}' for {water_obj.name}")
+
+
+def get_all_kcm_water_objects():
+    """Get all KCM water objects in the scene (useful for batch operations)"""
+    water_objects = []
+    for obj in bpy.data.objects:
+        if obj.get('is_kcm_water', False):
+            water_objects.append(obj)
+    return water_objects
+
+
+def organize_water_objects_by_collection():
+    """Organize water objects by their KCM collections (useful for multiple imports)"""
+    water_by_collection = {}
+    for obj in get_all_kcm_water_objects():
+        for collection in obj.users_collection:
+            if collection.name not in water_by_collection:
+                water_by_collection[collection.name] = []
+            water_by_collection[collection.name].append(obj)
+    return water_by_collection
+
+
+def print_water_import_summary():
+    """Print a summary of all water objects created during import (useful after batch imports)"""
+    water_objects = get_all_kcm_water_objects()
+    if not water_objects:
+        print("No KCM water objects found in scene")
+        return
+
+    print(f"\n=== KCM Water Import Summary ===")
+    print(f"Total water planes created: {len(water_objects)}")
+
+    # Group by collection
+    water_by_collection = organize_water_objects_by_collection()
+
+    if water_by_collection:
+        print(f"Water objects organized in {len(water_by_collection)} collections:")
+        for collection_name, water_list in water_by_collection.items():
+            print(f"  Collection '{collection_name}': {len(water_list)} water plane(s)")
+            for water_obj in water_list:
+                map_x = water_obj.get('kcm_map_x', 'Unknown')
+                map_y = water_obj.get('kcm_map_y', 'Unknown')
+                print(f"    - {water_obj.name}: Map({map_x},{map_y})")
+
+    # Show material sharing
+    shared_materials = set()
+    for obj in water_objects:
+        if obj.data.materials:
+            shared_materials.add(obj.data.materials[0].name)
+
+    if shared_materials:
+        print(f"Shared water materials: {list(shared_materials)}")
+
+    print("=== End Water Summary ===\n")
+
+
 # --- KCM Import Logic ---
 def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     kcm = KCMData()
@@ -310,7 +525,16 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
             world_z = kcm.heightmap[x, y] * final_height_scale  # Height to Z axis
             verts.append(Vector((world_x, world_y, world_z)))
 
-    # Create faces with proper winding order for Y-inverted coordinates
+    # Create faces with proper winding order based on original Delphi 7 source
+    # From the original CreateWater procedure, face indices are added as:
+    # lFaceGroup.Add(lMeshObj.Vertices.Count - 2); // v3
+    # lFaceGroup.Add(lMeshObj.Vertices.Count - 1); // v4
+    # lFaceGroup.Add(lMeshObj.Vertices.Count - 3); // v2
+    # lFaceGroup.Add(lMeshObj.Vertices.Count - 3); // v2
+    # lFaceGroup.Add(lMeshObj.Vertices.Count - 4); // v1
+    # lFaceGroup.Add(lMeshObj.Vertices.Count - 2); // v3
+    # This creates triangles with winding: (v3,v4,v2) and (v2,v1,v3)
+    # For quads, this translates to: (v1,v2,v4,v3) - counter-clockwise when viewed from above
     faces = []
     for y in range(256):
         for x in range(256):
@@ -319,7 +543,7 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
             v2 = y * 257 + (x + 1)
             v3 = (y + 1) * 257 + x
             v4 = (y + 1) * 257 + (x + 1)
-            # Create quad with correct winding order
+            # Create quad with correct counter-clockwise winding order (matches Delphi pattern)
             faces.append((v1, v2, v4, v3))
     mesh.from_pydata(verts, [], faces)
     
@@ -337,7 +561,21 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     apply_greyscale_map(mesh, kcm.colormap, "Colormap_RGB")
     for i, tex_map in enumerate(kcm.texturemaps):
         if tex_map is not None: apply_greyscale_map(mesh, tex_map, f"BlendMap_{i}")
-    
+
+    # Create water plane based on original Delphi 7 water feature (always create for every KCM)
+    water_obj = None
+    try:
+        water_obj = create_water_plane(kcm, map_x, map_y, final_grid_scale, final_height_scale, terrain_offset_x, terrain_offset_y)
+        if water_obj:
+            print(f"Successfully created water plane for KCM {map_x}_{map_y}")
+        else:
+            print(f"Warning: Failed to create water plane for KCM {map_x}_{map_y}")
+    except Exception as e:
+        print(f"Error creating water plane for KCM {map_x}_{map_y}: {e}")
+        import traceback
+        traceback.print_exc()
+        water_obj = None
+
     try:
         create_terrain_material(obj, kcm, game_path)
     except Exception as e:
@@ -357,8 +595,16 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     else:
         kcm_collection = bpy.data.collections[collection_name]
 
-    # Add object to the KCM-specific collection instead of scene collection
+    # Add terrain object to the KCM-specific collection instead of scene collection
     kcm_collection.objects.link(obj)
+
+    # Add water object to the same collection (water should always be created now)
+    if water_obj:
+        kcm_collection.objects.link(water_obj)
+        print(f"Added water plane '{water_obj.name}' to collection '{collection_name}'")
+    else:
+        print(f"Warning: No water object to add to collection '{collection_name}'")
+
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
 

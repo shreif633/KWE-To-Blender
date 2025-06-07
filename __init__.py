@@ -231,6 +231,13 @@ class IMPORT_OT_kal_kcm(bpy.types.Operator, ImportHelper):
                             obj_collection = collection.name
                             break
                     print(f"  - {obj.name}: Map({header['map_x']},{header['map_y']}) in Collection '{obj_collection}'")
+
+            # Show water import summary for batch imports
+            if imported_count > 1:  # Only show for multiple imports
+                try:
+                    kcm_file.print_water_import_summary()
+                except Exception as e:
+                    print(f"Could not generate water summary: {e}")
         else:
             # Import single KCM file
             try:
