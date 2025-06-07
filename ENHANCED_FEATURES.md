@@ -8,7 +8,22 @@
 
 ## 🆕 **New Features Added:**
 
-### 1. **Enhanced Path Management with File Browser** ✅
+### 1. **Original Delphi 7 Accurate Scaling, Positioning, and Rotation** ✅
+- **Location**: `kcm_file.py` lines 253-317 and `__init__.py` lines 128-129
+- **Features**:
+  - **Authentic Delphi 7 scaling** - Uses exact scaling from original Kal World Editor source code
+  - **Original scale defaults** - Terrain Scale: 1.0, Height Scale: 1.0 (no automatic reduction)
+  - **Correct height scaling** - Height values divided by 32 (line 824 in Unit1.pas: `-KCM.HeightMap[x][y]/32`)
+  - **Proper coordinate system** - 1 Blender unit = 1 game meter (original scaling)
+  - **Accurate positioning** - Map coordinates positioned like original (256 units per tile)
+  - **Correct Y coordinate inversion** - Y coordinates inverted like original (lines 3085-3087: `256-(position[1]*256)`)
+  - **Proper face winding** - Face creation accounts for coordinate system changes
+  - **Original rotation handling** - Maintains correct X, Y, Z orientation from Delphi 7
+  - **Source code references** - Based on actual Delphi 7 source code analysis from Unit1.pas and KalClientMap.pas
+  - **Enhanced 8x texture scaling** - All texture X and Y scales multiplied by 8 for better detail
+  - **User-controllable scaling** - Can adjust scale while maintaining original proportions
+
+### 2. **Enhanced Path Management with File Browser** ✅
 - **Location**: `__init__.py` lines 37-93 and `kcm_file.py` lines 15-62
 - **Features**:
   - **File Browser for ENV File**: Click folder icon to browse and select n.env file directly
@@ -18,7 +33,7 @@
   - Path validation with helpful error messages and file counts
   - Override capability for custom folder structures
 
-### 2. **Multiple KCM Import with Named Collections** ✅
+### 3. **Multiple KCM Import with Named Collections** ✅
 - **Location**: `__init__.py` lines 127-233 and `kcm_file.py` lines 274-294
 - **Features**:
   - Import multiple KCM files at once as positioned map tiles
@@ -29,12 +44,7 @@
   - Connected terrain tiles forming complete maps
   - Organized outliner with separate collections for each terrain
 
-### 3. **5% Terrain Scaling** ✅
-- **Location**: `kcm_file.py` lines 227-228
-- **Feature**: Terrain automatically scaled to 5% of original size
-- **Code**: `terrain_grid_scale = terrain_grid_scale * 0.05`
-
-### 2. **Enhanced ENV File Parsing (No Encryption Files Needed)** ✅
+### 4. **Enhanced ENV File Parsing (No Encryption Files Needed)** ✅
 - **Location**: `kcm_file.py` lines 107-220
 - **Feature**: Complete rewrite based on original Delphi 7 source code
 - **Benefits**:
@@ -43,7 +53,7 @@
   - Better error handling and debugging
   - Shows grass types and texture counts
 
-### 3. **Multi-Layer Texture System with Individual Resolution Scaling** ✅
+### 5. **Multi-Layer Texture System with Individual Resolution Scaling** ✅
 - **Location**: `kcm_file.py` lines 312-731 and `__init__.py` lines 896-933
 - **Features**:
   - **Multi-layer texture blending** exactly like original Kal World Editor
@@ -62,7 +72,7 @@
   - **Terrain-optimized material properties** (Metallic: 1.0, Roughness: 1.0)
   - **Automatic GTX to DDS conversion** and high-quality interpolation
 
-### 4. **ENV Texture Browser** ✅
+### 6. **ENV Texture Browser** ✅
 - **Location**: `__init__.py` lines 376-454
 - **Features**:
   - Complete n.env texture list in UI panel
@@ -70,7 +80,7 @@
   - Texture statistics and counts
   - Direct texture replacement from ENV list
 
-### 5. **GTX to DDS Conversion System** ✅
+### 7. **GTX to DDS Conversion System** ✅
 - **Location**: `kcm_file.py` lines 437-506
 - **Features**:
   - `convert_all_gtx_to_dds()` function
@@ -78,7 +88,7 @@
   - Progress tracking and status reporting
   - Automatic caching to avoid re-conversion
 
-### 6. **Enhanced Texture Management** ✅
+### 8. **Enhanced Texture Management** ✅
 - **Location**: `__init__.py` lines 126-273
 - **Features**:
   - Texture refresh operator
@@ -86,7 +96,7 @@
   - Real-time texture preview
   - Automatic GTX conversion when needed
 
-### 7. **Texture Information System** ✅
+### 9. **Texture Information System** ✅
 - **Location**: `kcm_file.py` lines 328-536
 - **Functions**:
   - `get_texture_info()` - Get terrain texture information
@@ -137,19 +147,20 @@ Before using any features, you MUST update the file paths in the test script and
 4. **Click texture names** to replace terrain textures
 5. **Convert GTX to DDS** automatically when needed
 
-### **Individual Texture Resolution Scaling:**
+### **Individual Texture Resolution Scaling with 8x Enhancement:**
 1. **Unique Resolution per Texture** - Each texture in n.env has its own specific resolution
 2. **Automatic Resolution Reading** - Reads individual texture sizes from n.env file
-3. **Natural Game-like Scaling** - Each texture appears at its correct scale like in the game:
-   - **32x32 textures** = Very high tiling (tiny details)
-   - **64x64 textures** = High tiling (small details)
-   - **128x128 textures** = Medium tiling (normal details)
-   - **256x256 textures** = Standard tiling (base scale)
-   - **512x512 textures** = Low tiling (large patterns)
-   - **1024x1024 textures** = Very low tiling (huge patterns)
+3. **Enhanced 8x Scaling** - All texture X and Y scales multiplied by 8 for better appearance:
+   - **32x32 textures** = Scale: 64.0 (very high tiling)
+   - **64x64 textures** = Scale: 32.0 (high tiling)
+   - **128x128 textures** = Scale: 16.0 (medium tiling)
+   - **256x256 textures** = Scale: 8.0 (base enhanced scale)
+   - **512x512 textures** = Scale: 4.0 (low tiling)
+   - **1024x1024 textures** = Scale: 2.0 (very low tiling)
 4. **Individual Mapping Nodes** - Each texture gets its own unique scaling calculation
 5. **Resolution Display** - Shows ENV resolution and actual DDS size in UI
 6. **Variety Support** - Handles any resolution combination (e.g., 64x128, 256x512, etc.)
+7. **Enhanced Detail** - 8x multiplier provides much better texture detail and appearance
 
 ### **Edit Texture Blend Maps with Brush Tools:**
 1. **Select a KCM terrain object** with multiple texture layers
@@ -180,11 +191,31 @@ Before using any features, you MUST update the file paths in the test script and
 
 ## 🔧 **Technical Implementation:**
 
-### **Terrain Scaling:**
+### **Original Delphi 7 Terrain Scaling and Positioning:**
 ```python
-# Automatic 5% scaling in import_kcm()
-terrain_grid_scale = terrain_grid_scale * 0.05
-height_scale = height_scale * 0.05
+# Original Delphi 7 scaling from source code analysis
+original_grid_scale = 1.0  # 1 Blender unit = 1 game meter
+original_height_scale = 1.0 / 32.0  # Height divided by 32 like original
+
+# Apply user scaling on top of original Delphi 7 scaling
+final_grid_scale = original_grid_scale * terrain_grid_scale  # Default: 1.0 * 1.0 = 1.0
+final_height_scale = original_height_scale * height_scale    # Default: 0.03125 * 1.0 = 0.03125
+
+# Coordinate system (from lines 3085-3087 in Unit1.pas)
+terrain_offset_x = map_x * tile_size                    # X: position[0]*256
+terrain_offset_y = -map_y * tile_size                   # Y: 256-(position[1]*256) - INVERTED!
+world_y = ((256 - y) * final_grid_scale) + terrain_offset_y  # Y coordinate inversion
+
+# Default import parameters (original scale)
+terrain_scale: default=1.0  # No automatic reduction
+height_scale: default=1.0   # No automatic reduction
+```
+
+### **Enhanced 8x Texture Scaling:**
+```python
+# Enhanced texture scaling for better detail
+scale_x = (base_resolution / texture_width) * 8.0
+scale_y = (base_resolution / texture_height) * 8.0
 ```
 
 ### **Enhanced Material Creation:**

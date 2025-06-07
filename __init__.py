@@ -125,8 +125,8 @@ class IMPORT_OT_kal_kcm(bpy.types.Operator, ImportHelper):
     filename_ext = ".kcm"
     filter_glob: StringProperty(default="*.kcm", options={'HIDDEN'})
 
-    terrain_scale: FloatProperty(name="Terrain Scale", default=10.0, description="Scale of the terrain grid")
-    height_scale: FloatProperty(name="Height Scale", default=0.1, description="Multiplier for height values")
+    terrain_scale: FloatProperty(name="Terrain Scale", default=1.0, description="Scale of the terrain grid (1.0 = original Delphi 7 scale)")
+    height_scale: FloatProperty(name="Height Scale", default=1.0, description="Multiplier for height values (1.0 = original Delphi 7 scale)")
 
     import_multiple: bpy.props.BoolProperty(
         name="Import Multiple KCM Files",

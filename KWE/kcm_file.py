@@ -247,9 +247,18 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     kcm = KCMData()
     if not kcm.load(filepath): return
 
-    # Reduce terrain size to 5% of original size
-    terrain_grid_scale = terrain_grid_scale * 0.05
-    height_scale = height_scale * 0.05
+    # Use original Delphi 7 scaling from the source code
+    # Original scaling: 1 Blender unit = 1 game meter
+    # Height scale: Height values divided by 32 (line 824 in Unit1.pas: -KCM.HeightMap[x][y]/32)
+    # Grid scale: Direct 1:1 mapping like original Delphi 7
+
+    # Apply original Delphi 7 scaling first, then user scaling
+    original_grid_scale = 1.0  # Original scale 1 from Delphi 7
+    original_height_scale = 1.0 / 32.0  # Original height scale from Delphi 7
+
+    # Apply user scaling on top of original Delphi 7 scaling
+    final_grid_scale = original_grid_scale * terrain_grid_scale
+    final_height_scale = original_height_scale * height_scale
 
     # Get map coordinates
     map_x = kcm.header['map_x']
@@ -259,35 +268,59 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     mesh = bpy.data.meshes.new(name=mesh_name)
     obj = bpy.data.objects.new(mesh_name, mesh)
     obj['kcm_header'] = kcm.header
-    obj['kcm_import_grid_scale'] = terrain_grid_scale
-    obj['kcm_import_height_scale'] = height_scale
+    obj['kcm_import_grid_scale'] = final_grid_scale
+    obj['kcm_import_height_scale'] = final_height_scale
 
-    # Calculate terrain tile size (256 * terrain_grid_scale)
-    tile_size = 256 * terrain_grid_scale
+    # Calculate terrain tile positioning based on original Delphi 7 code
+    # Each terrain tile is 256x256 game units
+    # From lines 3085-3087 in Unit1.pas:
+    # X: position[0]*256 (direct)
+    # Y: 256-(position[1]*256) (inverted!)
+    # Z: position[2]/32 (height)
+    tile_size = 256 * final_grid_scale
 
-    # Position the terrain based on its X,Y coordinates
-    # Each terrain tile is 256x256 units, so offset by tile_size * coordinate
+    # Position the terrain based on its X,Y coordinates like in original Delphi 7
+    # Note: Y coordinate is inverted in the original Delphi 7 code!
     terrain_offset_x = map_x * tile_size
-    terrain_offset_y = map_y * tile_size
+    terrain_offset_y = -map_y * tile_size  # Invert Y coordinate like original Delphi 7
 
-    print(f"Importing KCM {map_x},{map_y} at world position ({terrain_offset_x:.2f}, {terrain_offset_y:.2f})")
+    print(f"Importing KCM {map_x},{map_y} with original Delphi 7 scaling:")
+    print(f"  User grid scale: {terrain_grid_scale:.3f} -> Final: {final_grid_scale:.6f}")
+    print(f"  User height scale: {height_scale:.3f} -> Final: {final_height_scale:.6f}")
+    print(f"  Original Delphi 7: Grid=1.0, Height=1/32={original_height_scale:.6f}")
+    print(f"  World position: ({terrain_offset_x:.2f}, {terrain_offset_y:.2f})")
 
-    # Create vertices with proper world positioning
+    # Create vertices with proper world positioning using original coordinate system
     verts = []
     for y in range(257):
         for x in range(257):
-            world_x = (x * terrain_grid_scale) + terrain_offset_x
-            world_y = (y * terrain_grid_scale) + terrain_offset_y
-            world_z = kcm.heightmap[x, y] * height_scale
+            # Original Delphi 7 coordinate system from lines 3085-3087:
+            # X: position[0]*256 (direct)
+            # Y: 256-(position[1]*256) (inverted!)
+            # Z: position[2]/32 (height)
+            world_x = (x * final_grid_scale) + terrain_offset_x
+            # Apply Y coordinate inversion like original Delphi 7
+            world_y = ((256 - y) * final_grid_scale) + terrain_offset_y
+            world_z = kcm.heightmap[x, y] * final_height_scale
             verts.append(Vector((world_x, world_y, world_z)))
 
-    faces = [(y * 257 + x, y * 257 + x + 1, (y + 1) * 257 + x + 1, (y + 1) * 257 + x) for y in range(256) for x in range(256)]
+    # Create faces with proper winding order for Y-inverted coordinates
+    faces = []
+    for y in range(256):
+        for x in range(256):
+            # Vertex indices for quad (accounting for Y inversion)
+            v1 = y * 257 + x
+            v2 = y * 257 + (x + 1)
+            v3 = (y + 1) * 257 + x
+            v4 = (y + 1) * 257 + (x + 1)
+            # Create quad with correct winding order
+            faces.append((v1, v2, v4, v3))
     mesh.from_pydata(verts, [], faces)
     
     bm = bmesh.new(); bm.from_mesh(mesh)
     uv_layer = bm.loops.layers.uv.verify()
     for face in bm.faces:
-        for loop in face.loops: loop[uv_layer].uv = loop.vert.co.xy / (256 * terrain_grid_scale)
+        for loop in face.loops: loop[uv_layer].uv = loop.vert.co.xy / (256 * final_grid_scale)
     bm.to_mesh(mesh); bm.free()
 
     apply_greyscale_map(mesh, kcm.colormap, "Colormap_RGB")
@@ -548,14 +581,14 @@ def create_texture_layer(nodes, links, mapping, layer_index, tex_idx, env_data, 
     base_resolution = 256.0  # Base terrain resolution
 
     # Calculate individual scale factors for X and Y
-    scale_x = base_resolution / texture_width
-    scale_y = base_resolution / texture_height
+    scale_x = (base_resolution / texture_width) * 8.0  # Multiply by 8 for better texture appearance
+    scale_y = (base_resolution / texture_height) * 8.0  # Multiply by 8 for better texture appearance
 
     # Debug output to verify scaling calculation
     print(f"  Texture {texture_name}: {texture_width}x{texture_height}")
-    print(f"  Scale calculation: {base_resolution}/{texture_width} = {scale_x:.3f}, {base_resolution}/{texture_height} = {scale_y:.3f}")
+    print(f"  Scale calculation: ({base_resolution}/{texture_width}) * 8 = {scale_x:.3f}, ({base_resolution}/{texture_height}) * 8 = {scale_y:.3f}")
 
-    # Apply natural texture scaling like in the game
+    # Apply enhanced texture scaling (8x multiplier)
     tex_mapping.inputs['Scale'].default_value = (scale_x, scale_y, 1.0)
 
     # Verify the scale was set correctly
