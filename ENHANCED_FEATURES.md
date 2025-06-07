@@ -8,15 +8,38 @@
 
 ## 🆕 **New Features Added:**
 
-### 1. **5% Terrain Scaling** ✅
-- **Location**: `kcm_file.py` lines 117-118
+### 1. **Enhanced Path Management with File Browser** ✅
+- **Location**: `__init__.py` lines 37-93 and `kcm_file.py` lines 15-62
+- **Features**:
+  - **File Browser for ENV File**: Click folder icon to browse and select n.env file directly
+  - **Folder Browser for Textures**: Click folder icon to browse and select GTX texture folder
+  - Separate path settings for ENV file, GTX texture folder, and DDS output folder
+  - Auto-detection of paths from main game path
+  - Path validation with helpful error messages and file counts
+  - Override capability for custom folder structures
+
+### 2. **Multiple KCM Import with Map Tile Positioning** ✅
+- **Location**: `__init__.py` lines 127-191 and `kcm_file.py` lines 223-262
+- **Features**:
+  - Import multiple KCM files at once as positioned map tiles
+  - Automatic positioning based on X,Y coordinates from KCM headers
+  - Map layout analysis and overview creation
+  - Batch processing with progress reporting
+  - Connected terrain tiles forming complete maps
+
+### 3. **5% Terrain Scaling** ✅
+- **Location**: `kcm_file.py` lines 227-228
 - **Feature**: Terrain automatically scaled to 5% of original size
 - **Code**: `terrain_grid_scale = terrain_grid_scale * 0.05`
 
-### 2. **Enhanced ENV File Parsing** ✅
-- **Location**: `kcm_file.py` lines 44-103
-- **Feature**: Improved ENV file reader with error handling and debugging
-- **Benefits**: Better texture loading, detailed logging
+### 2. **Enhanced ENV File Parsing (No Encryption Files Needed)** ✅
+- **Location**: `kcm_file.py` lines 107-220
+- **Feature**: Complete rewrite based on original Delphi 7 source code
+- **Benefits**:
+  - Direct ENV file reading without EnCrypt.dat/DeCrypt.dat
+  - Accurate texture list extraction from n.env file
+  - Better error handling and debugging
+  - Shows grass types and texture counts
 
 ### 3. **Real Texture Display** ✅
 - **Location**: `kcm_file.py` lines 164-303
@@ -63,10 +86,29 @@
 
 ## 🎮 **How to Use Enhanced Features:**
 
-### **Import with Enhanced Features:**
+### **Setup Paths:**
+1. Go to Edit > Preferences > Add-ons > Kal Online Tools Enhanced
+2. Set your main Kal Online game path (e.g., C:/KalOnline)
+3. **Browse for ENV File**: Click the folder icon next to "ENV File Path" to select your n.env file directly
+4. **Browse for Texture Folder**: Click the folder icon next to "GTX Texture Folder" to select your texture folder
+5. Optionally set DDS output folder (or leave empty for temp folder)
+6. Use "Auto-Detect All Paths" to automatically find standard paths
+7. Use "Validate Paths" to check all paths are correct
+
+### **Import Single KCM:**
 1. File > Import > Kal Online Map (.kcm)
-2. Terrain will be automatically scaled to 5% size
-3. Textures will load and display in Material Preview mode
+2. Leave "Import Multiple KCM Files" unchecked
+3. Select single .kcm file
+4. Terrain will be automatically scaled to 5% size
+5. Textures will load and display in Material Preview mode
+
+### **Import Multiple KCM Files as Map Tiles:**
+1. File > Import > Kal Online Map (.kcm)
+2. Check "Import Multiple KCM Files"
+3. Select multiple .kcm files (e.g., 0_0.kcm, 0_1.kcm, 1_0.kcm, etc.)
+4. Files will be automatically positioned based on their X,Y coordinates
+5. Creates a connected map with proper tile positioning
+6. Generates map overview object showing layout
 
 ### **ENV Texture Browser:**
 1. Open "ENV Texture Browser" panel in 3D viewport sidebar

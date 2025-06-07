@@ -10,6 +10,68 @@ from mathutils import Vector
 from .util import BinaryReader, BinaryWriter, KalCRC32
 from .gtx_converter import convert_gtx_to_dds
 
+
+# --- Path Helper Functions ---
+def get_addon_preferences():
+    """Get addon preferences with path settings"""
+    try:
+        addon_name = __name__.split('.')[0]
+        prefs = bpy.context.preferences.addons[addon_name].preferences
+        return prefs
+    except:
+        return None
+
+
+def get_env_file_path(game_path=None):
+    """Get the ENV file path from preferences or game path"""
+    prefs = get_addon_preferences()
+
+    if prefs and prefs.env_file_path and os.path.exists(prefs.env_file_path):
+        return prefs.env_file_path
+
+    if not game_path and prefs:
+        game_path = prefs.game_path
+
+    if game_path:
+        default_path = os.path.join(game_path, "Data", "3dData", "Env", "g_env.env")
+        if os.path.exists(default_path):
+            return default_path
+
+    return None
+
+
+def get_texture_folder_path(game_path=None):
+    """Get the texture folder path from preferences or game path"""
+    prefs = get_addon_preferences()
+
+    if prefs and prefs.texture_folder_path and os.path.exists(prefs.texture_folder_path):
+        return prefs.texture_folder_path
+
+    if not game_path and prefs:
+        game_path = prefs.game_path
+
+    if game_path:
+        default_path = os.path.join(game_path, "Data", "3dData", "Texture")
+        if os.path.exists(default_path):
+            return default_path
+
+    return None
+
+
+def get_dds_output_path():
+    """Get the DDS output folder path from preferences or temp folder"""
+    prefs = get_addon_preferences()
+
+    if prefs and prefs.dds_output_path:
+        os.makedirs(prefs.dds_output_path, exist_ok=True)
+        return prefs.dds_output_path
+
+    # Default to temp folder
+    temp_dir = os.path.join(bpy.app.tempdir, "kal_textures")
+    os.makedirs(temp_dir, exist_ok=True)
+    return temp_dir
+
+
 # --- Data Structures ---
 class KCMData:
     def __init__(self):
@@ -51,62 +113,111 @@ class EnvFileData:
 
         print(f"Loading ENV file: {filepath}")
 
-        with open(filepath, 'rb') as f:
-            r = BinaryReader(f)
+        try:
+            with open(filepath, 'rb') as f:
+                # Read grass types first (converted from Delphi 7 code)
+                f.seek(0x28)  # Seek to position 0x28 (40 decimal)
 
-            # Load grass list (first part)
-            r.seek(0x28)
-            i = 0
-            while i < 2:
-                try:
-                    index = r.read_int32()
-                    if index == 1:
-                        i += 1
-                        if i == 2: break
-                    str_len = r.read_int32()
-                    if str_len > 0 and str_len < 100:
-                        grass_name = r.read_string(str_len)
-                        self.grass_list.append(grass_name + '.gb')
-                except struct.error:
-                    break
+                i = 0
+                while i < 2:
+                    try:
+                        # Read index (4 bytes)
+                        index_bytes = f.read(4)
+                        if len(index_bytes) < 4:
+                            break
+                        index = struct.unpack('<I', index_bytes)[0]
 
-            # Load texture index list (second part)
-            f.seek(0)
-            content = f.read()
-            try:
-                start_pos = content.find(b'b_001')
-                if start_pos == -1:
+                        if index == 1:
+                            i += 1
+                            if i == 2:
+                                break
+
+                        # Read string length (4 bytes)
+                        str_len_bytes = f.read(4)
+                        if len(str_len_bytes) < 4:
+                            break
+                        str_len = struct.unpack('<I', str_len_bytes)[0]
+
+                        if str_len > 0 and str_len < 100:
+                            # Read string
+                            text_bytes = f.read(str_len)
+                            if len(text_bytes) == str_len:
+                                text = text_bytes.decode('ascii', errors='ignore')
+                                self.grass_list.append(f"Grass type {index} = {text}.gb")
+                                print(f"Found grass type {index}: {text}.gb")
+
+                    except (struct.error, UnicodeDecodeError) as e:
+                        print(f"Error reading grass data: {e}")
+                        break
+
+                # Read texture list (converted from Delphi 7 code)
+                # Find the offset of the first texture by searching for 'b_001'
+                f.seek(0)
+                file_content = f.read()
+                file_size = len(file_content)
+
+                # Search for 'b_001' marker
+                texture_start_pos = None
+                for x in range(file_size - 5):
+                    if file_content[x:x+5] == b'b_001':
+                        texture_start_pos = x
+                        break
+
+                if texture_start_pos is None:
                     print("Could not find texture list start marker 'b_001' in ENV file")
                     return
 
-                r.seek(start_pos - 4)
-                texture_count = 0
+                print(f"Found texture list marker at position: {texture_start_pos}")
 
-                while r.tell() < len(content) - 8:  # Ensure we have enough bytes to read
+                # Move 4 bytes back from the marker position
+                f.seek(texture_start_pos - 4)
+
+                # Read textures until end of file
+                texture_count = 0
+                while f.tell() < file_size - 1:
                     try:
-                        str_len = r.read_int32()
+                        texture_count += 1
+
+                        # Read string length (4 bytes)
+                        str_len_bytes = f.read(4)
+                        if len(str_len_bytes) < 4:
+                            break
+                        str_len = struct.unpack('<I', str_len_bytes)[0]
+
                         if str_len > 100 or str_len < 1:
                             break
 
-                        texture_name = r.read_string(str_len)
-                        self.texture_index_list.append(texture_name + '.gtx')
-                        texture_count += 1
-
-                        if r.tell() + 8 > len(content):
+                        # Read texture name
+                        text_bytes = f.read(str_len)
+                        if len(text_bytes) != str_len:
                             break
 
-                        # Skip two integers
-                        r.read_int32()
-                        r.read_int32()
+                        text = text_bytes.decode('ascii', errors='ignore')
+                        self.texture_index_list.append(text + '.gtx')
 
-                    except struct.error:
+                        # Skip two integers (8 bytes total)
+                        skip_bytes = f.read(8)
+                        if len(skip_bytes) < 8:
+                            break
+
+                    except (struct.error, UnicodeDecodeError) as e:
+                        print(f"Error reading texture {texture_count}: {e}")
                         break
 
-                print(f"Loaded {len(self.grass_list)} grass types and {len(self.texture_index_list)} textures from ENV file")
+                print(f"Successfully loaded ENV file:")
+                print(f"  - {len(self.grass_list)} grass types")
+                print(f"  - {len(self.texture_index_list)} textures")
 
-            except struct.error as e:
-                print(f"Error reading ENV file: {e}")
-                pass
+                # Show first few textures for verification
+                if self.texture_index_list:
+                    print("First 10 textures:")
+                    for i, tex in enumerate(self.texture_index_list[:10]):
+                        print(f"  {i}: {tex}")
+
+        except Exception as e:
+            print(f"Failed to load ENV file {filepath}: {e}")
+            import traceback
+            traceback.print_exc()
 
 # --- KCM Import Logic ---
 def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
@@ -117,14 +228,36 @@ def import_kcm(filepath, game_path, terrain_grid_scale, height_scale):
     terrain_grid_scale = terrain_grid_scale * 0.05
     height_scale = height_scale * 0.05
 
-    mesh_name = f"KCM_{kcm.header['map_x']}_{kcm.header['map_y']}"
+    # Get map coordinates
+    map_x = kcm.header['map_x']
+    map_y = kcm.header['map_y']
+
+    mesh_name = f"KCM_{map_x}_{map_y}"
     mesh = bpy.data.meshes.new(name=mesh_name)
     obj = bpy.data.objects.new(mesh_name, mesh)
     obj['kcm_header'] = kcm.header
     obj['kcm_import_grid_scale'] = terrain_grid_scale
     obj['kcm_import_height_scale'] = height_scale
 
-    verts = [Vector((x * terrain_grid_scale, y * terrain_grid_scale, kcm.heightmap[x, y] * height_scale)) for y in range(257) for x in range(257)]
+    # Calculate terrain tile size (256 * terrain_grid_scale)
+    tile_size = 256 * terrain_grid_scale
+
+    # Position the terrain based on its X,Y coordinates
+    # Each terrain tile is 256x256 units, so offset by tile_size * coordinate
+    terrain_offset_x = map_x * tile_size
+    terrain_offset_y = map_y * tile_size
+
+    print(f"Importing KCM {map_x},{map_y} at world position ({terrain_offset_x:.2f}, {terrain_offset_y:.2f})")
+
+    # Create vertices with proper world positioning
+    verts = []
+    for y in range(257):
+        for x in range(257):
+            world_x = (x * terrain_grid_scale) + terrain_offset_x
+            world_y = (y * terrain_grid_scale) + terrain_offset_y
+            world_z = kcm.heightmap[x, y] * height_scale
+            verts.append(Vector((world_x, world_y, world_z)))
+
     faces = [(y * 257 + x, y * 257 + x + 1, (y + 1) * 257 + x + 1, (y + 1) * 257 + x) for y in range(256) for x in range(256)]
     mesh.from_pydata(verts, [], faces)
     
@@ -163,7 +296,13 @@ def apply_greyscale_map(mesh, map_data, layer_name):
 
 def create_terrain_material(obj, kcm, game_path):
     env_data = EnvFileData()
-    env_path = os.path.join(game_path, "Data", "3dData", "Env", "g_env.env")
+
+    # Use path helpers to get correct ENV file path
+    env_path = get_env_file_path(game_path)
+    if not env_path:
+        print(f"ENV file not found. Check paths in addon preferences.")
+        return
+
     env_data.load(env_path)
 
     # Store texture info in object for later editing
@@ -209,13 +348,16 @@ def create_terrain_material(obj, kcm, game_path):
         if tex_idx < len(env_data.texture_index_list):
             gtx_name = env_data.texture_index_list[tex_idx]
             texture_name = gtx_name.replace('.gtx', '')
-            gtx_path = os.path.join(game_path, "Data", "3dData", "Texture", gtx_name)
 
-            # Ensure temp directory exists
-            temp_dir = os.path.join(bpy.app.tempdir, "kal_textures")
-            os.makedirs(temp_dir, exist_ok=True)
+            # Use path helpers to get correct texture folder and DDS output paths
+            texture_folder = get_texture_folder_path(game_path)
+            if not texture_folder:
+                print(f"Texture folder not found. Check paths in addon preferences.")
+                continue
 
-            dds_path = os.path.join(temp_dir, gtx_name.replace('.gtx', '.dds'))
+            gtx_path = os.path.join(texture_folder, gtx_name)
+            dds_output_dir = get_dds_output_path()
+            dds_path = os.path.join(dds_output_dir, gtx_name.replace('.gtx', '.dds'))
 
             # Convert GTX to DDS if needed
             if not os.path.exists(dds_path):
@@ -440,16 +582,24 @@ def convert_all_gtx_to_dds(game_path, progress_callback=None):
 
     # Load ENV file to get texture list
     env_data = EnvFileData()
-    env_path = os.path.join(game_path, "Data", "3dData", "Env", "g_env.env")
+    env_path = get_env_file_path(game_path)
+    if not env_path:
+        print("ENV file not found. Check paths in addon preferences.")
+        return []
+
     env_data.load(env_path)
 
     if not env_data.texture_index_list:
         print("No textures found in ENV file")
         return []
 
-    # Ensure temp directory exists
-    temp_dir = os.path.join(bpy.app.tempdir, "kal_textures")
-    os.makedirs(temp_dir, exist_ok=True)
+    # Get texture folder and DDS output paths
+    texture_folder = get_texture_folder_path(game_path)
+    if not texture_folder:
+        print("Texture folder not found. Check paths in addon preferences.")
+        return []
+
+    dds_output_dir = get_dds_output_path()
 
     converted_textures = []
     total_textures = len(env_data.texture_index_list)
@@ -458,8 +608,8 @@ def convert_all_gtx_to_dds(game_path, progress_callback=None):
         if progress_callback:
             progress_callback(i, total_textures, gtx_name)
 
-        gtx_path = os.path.join(game_path, "Data", "3dData", "Texture", gtx_name)
-        dds_path = os.path.join(temp_dir, gtx_name.replace('.gtx', '.dds'))
+        gtx_path = os.path.join(texture_folder, gtx_name)
+        dds_path = os.path.join(dds_output_dir, gtx_name.replace('.gtx', '.dds'))
 
         # Skip if already converted
         if os.path.exists(dds_path):
@@ -509,15 +659,22 @@ def convert_all_gtx_to_dds(game_path, progress_callback=None):
 def get_env_texture_list(game_path):
     """Get the complete texture list from ENV file with conversion status"""
     env_data = EnvFileData()
-    env_path = os.path.join(game_path, "Data", "3dData", "Env", "g_env.env")
+
+    # Use path helpers to get correct paths
+    env_path = get_env_file_path(game_path)
+    if not env_path:
+        print("ENV file not found. Check paths in addon preferences.")
+        return []
+
     env_data.load(env_path)
 
-    temp_dir = os.path.join(bpy.app.tempdir, "kal_textures")
+    texture_folder = get_texture_folder_path(game_path)
+    dds_output_dir = get_dds_output_path()
     texture_list = []
 
     for i, gtx_name in enumerate(env_data.texture_index_list):
-        gtx_path = os.path.join(game_path, "Data", "3dData", "Texture", gtx_name)
-        dds_path = os.path.join(temp_dir, gtx_name.replace('.gtx', '.dds'))
+        gtx_path = os.path.join(texture_folder, gtx_name) if texture_folder else ""
+        dds_path = os.path.join(dds_output_dir, gtx_name.replace('.gtx', '.dds'))
 
         texture_info = {
             'index': i,
@@ -534,6 +691,144 @@ def get_env_texture_list(game_path):
         texture_list.append(texture_info)
 
     return texture_list
+
+
+def get_kcm_map_info(filepath):
+    """Get basic map information from a KCM file without full import"""
+    try:
+        kcm = KCMData()
+        if kcm.load(filepath):
+            return {
+                'filepath': filepath,
+                'filename': os.path.basename(filepath),
+                'map_x': kcm.header['map_x'],
+                'map_y': kcm.header['map_y'],
+                'valid': True
+            }
+    except Exception as e:
+        print(f"Failed to read KCM info from {filepath}: {e}")
+
+    return {
+        'filepath': filepath,
+        'filename': os.path.basename(filepath),
+        'map_x': 0,
+        'map_y': 0,
+        'valid': False
+    }
+
+
+def analyze_kcm_batch(filepaths):
+    """Analyze a batch of KCM files and return map layout information"""
+    print(f"=== Analyzing {len(filepaths)} KCM Files ===")
+
+    map_info = []
+    valid_maps = []
+
+    for filepath in filepaths:
+        info = get_kcm_map_info(filepath)
+        map_info.append(info)
+        if info['valid']:
+            valid_maps.append(info)
+
+    if not valid_maps:
+        print("No valid KCM files found")
+        return map_info, None
+
+    # Calculate map bounds
+    min_x = min(m['map_x'] for m in valid_maps)
+    max_x = max(m['map_x'] for m in valid_maps)
+    min_y = min(m['map_y'] for m in valid_maps)
+    max_y = max(m['map_y'] for m in valid_maps)
+
+    map_layout = {
+        'total_files': len(filepaths),
+        'valid_files': len(valid_maps),
+        'map_bounds': {
+            'min_x': min_x, 'max_x': max_x,
+            'min_y': min_y, 'max_y': max_y,
+            'width': max_x - min_x + 1,
+            'height': max_y - min_y + 1
+        },
+        'coverage': {}
+    }
+
+    # Create coverage map
+    for info in valid_maps:
+        coord_key = f"{info['map_x']},{info['map_y']}"
+        map_layout['coverage'][coord_key] = info['filename']
+
+    print(f"Map Layout Analysis:")
+    print(f"  Valid files: {len(valid_maps)}/{len(filepaths)}")
+    print(f"  Map bounds: X({min_x} to {max_x}), Y({min_y} to {max_y})")
+    print(f"  Map size: {map_layout['map_bounds']['width']} x {map_layout['map_bounds']['height']} tiles")
+
+    # Show coverage grid
+    print(f"  Coverage grid:")
+    for y in range(max_y, min_y - 1, -1):  # Top to bottom
+        row = f"    Y{y:2d}: "
+        for x in range(min_x, max_x + 1):
+            coord_key = f"{x},{y}"
+            if coord_key in map_layout['coverage']:
+                row += "■ "
+            else:
+                row += "□ "
+        print(row)
+
+    return map_info, map_layout
+
+
+def create_map_overview_object(map_layout, terrain_grid_scale):
+    """Create a simple overview object showing the map layout"""
+    if not map_layout:
+        return None
+
+    # Adjust scale for 5% terrain size
+    terrain_grid_scale = terrain_grid_scale * 0.05
+    tile_size = 256 * terrain_grid_scale
+
+    bounds = map_layout['map_bounds']
+
+    # Create a simple plane for each map tile
+    overview_name = f"Map_Overview_{bounds['width']}x{bounds['height']}"
+
+    # Create collection for organization
+    if overview_name not in bpy.data.collections:
+        overview_collection = bpy.data.collections.new(overview_name)
+        bpy.context.scene.collection.children.link(overview_collection)
+    else:
+        overview_collection = bpy.data.collections[overview_name]
+
+    # Create overview plane
+    bpy.ops.mesh.primitive_plane_add(
+        size=1,
+        location=(
+            (bounds['min_x'] + bounds['max_x']) * tile_size / 2,
+            (bounds['min_y'] + bounds['max_y']) * tile_size / 2,
+            -1  # Slightly below terrain
+        )
+    )
+
+    overview_obj = bpy.context.active_object
+    overview_obj.name = overview_name
+    overview_obj.scale = (
+        bounds['width'] * tile_size / 2,
+        bounds['height'] * tile_size / 2,
+        1
+    )
+
+    # Move to overview collection
+    bpy.context.scene.collection.objects.unlink(overview_obj)
+    overview_collection.objects.link(overview_obj)
+
+    # Add custom properties
+    overview_obj['map_layout'] = {
+        'total_files': map_layout['total_files'],
+        'valid_files': map_layout['valid_files'],
+        'bounds': bounds
+    }
+
+    print(f"Created map overview object: {overview_name}")
+    return overview_obj
 
 def setup_texture_paint_slots(obj):
     if not obj.data.materials or not obj.data.materials[0]: return
