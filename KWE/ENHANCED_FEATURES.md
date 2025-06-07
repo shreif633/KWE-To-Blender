@@ -43,13 +43,16 @@
   - Better error handling and debugging
   - Shows grass types and texture counts
 
-### 3. **Multi-Layer Texture System with Natural Resolution Scaling** ✅
-- **Location**: `kcm_file.py` lines 312-546 and `__init__.py` lines 896-933
+### 3. **Multi-Layer Texture System with Individual Resolution Scaling** ✅
+- **Location**: `kcm_file.py` lines 312-731 and `__init__.py` lines 896-933
 - **Features**:
   - **Multi-layer texture blending** exactly like original Kal World Editor
-  - **Natural texture resolution scaling** based on actual texture sizes from n.env file
-  - **Automatic texture scaling** - larger textures (512x512) tile less than smaller ones (64x64)
-  - **Resolution-aware material creation** with individual mapping nodes per texture
+  - **Individual texture resolution scaling** - each texture uses its unique size from n.env file
+  - **Per-texture mapping nodes** - every texture gets its own scaling calculation
+  - **Natural game-accurate scaling** - textures appear at correct scale like in the original game
+  - **Enhanced debug output** - shows resolution and scaling for each texture
+  - **Material verification system** - confirms proper scaling setup
+  - **Resolution display in UI** - shows texture sizes next to names in all panels
   - **Blend map creation** from KCM texture map data (256x256 grayscale images)
   - **Natural texture layering** with proper opacity blending between layers
   - **Texture paint mode support** for editing blend maps with Blender's brush tools
@@ -58,7 +61,6 @@
   - **Enhanced material creation** with proper shader node setup
   - **Terrain-optimized material properties** (Metallic: 1.0, Roughness: 1.0)
   - **Automatic GTX to DDS conversion** and high-quality interpolation
-  - **Resolution display** in texture manager showing ENV and DDS sizes
 
 ### 4. **ENV Texture Browser** ✅
 - **Location**: `__init__.py` lines 376-454

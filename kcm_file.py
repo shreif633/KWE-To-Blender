@@ -397,6 +397,9 @@ def create_terrain_material(obj, kcm, game_path):
     # Set viewport shading to show textures properly
     setup_viewport_for_textures()
 
+    # Verify material setup
+    verify_material_setup(obj, mat)
+
     print(f"Created multi-layer terrain material for {obj.name}")
 
 
@@ -539,15 +542,25 @@ def create_texture_layer(nodes, links, mapping, layer_index, tex_idx, env_data, 
     tex_mapping.label = f"Scale {layer_index}: {texture_name}"
     tex_mapping.location = (-600, -layer_index * 300)
 
-    # Calculate texture scale based on resolution
+    # Calculate texture scale based on resolution for natural game-like appearance
     # The game uses different texture scales based on resolution
     # Larger textures (like 512x512) should tile less than smaller ones (like 64x64)
     base_resolution = 256.0  # Base terrain resolution
+
+    # Calculate individual scale factors for X and Y
     scale_x = base_resolution / texture_width
     scale_y = base_resolution / texture_height
 
+    # Debug output to verify scaling calculation
+    print(f"  Texture {texture_name}: {texture_width}x{texture_height}")
+    print(f"  Scale calculation: {base_resolution}/{texture_width} = {scale_x:.3f}, {base_resolution}/{texture_height} = {scale_y:.3f}")
+
     # Apply natural texture scaling like in the game
     tex_mapping.inputs['Scale'].default_value = (scale_x, scale_y, 1.0)
+
+    # Verify the scale was set correctly
+    actual_scale = tex_mapping.inputs['Scale'].default_value
+    print(f"  Applied scale: ({actual_scale[0]:.3f}, {actual_scale[1]:.3f}, {actual_scale[2]:.3f})")
 
     # Connect main UV mapping to this texture's mapping
     links.new(mapping.outputs['Vector'], tex_mapping.inputs['Vector'])
@@ -668,6 +681,51 @@ def create_texture_blend_chain(nodes, links, texture_layers, blend_maps):
             current_color = texture_layers[i].outputs['Color']
 
     return current_color
+
+
+def verify_material_setup(obj, mat):
+    """Verify that the material setup is correct and show scaling information"""
+    print(f"=== Material Setup Verification for {obj.name} ===")
+
+    if not mat or not mat.use_nodes:
+        print("  ERROR: Material has no nodes")
+        return
+
+    nodes = mat.node_tree.nodes
+
+    # Check for texture nodes and their scaling
+    texture_nodes = [node for node in nodes if node.type == 'TEX_IMAGE' and node.name.startswith('Texture_')]
+    mapping_nodes = [node for node in nodes if node.type == 'MAPPING' and node.name.startswith('Mapping_')]
+
+    print(f"  Found {len(texture_nodes)} texture nodes")
+    print(f"  Found {len(mapping_nodes)} mapping nodes")
+
+    # Verify each texture has its own mapping with correct scale
+    for tex_node in texture_nodes:
+        layer_index = tex_node.name.split('_')[1]
+        mapping_node = nodes.get(f"Mapping_{layer_index}")
+
+        if mapping_node:
+            scale = mapping_node.inputs['Scale'].default_value
+            print(f"  Texture {layer_index}: Scale = ({scale[0]:.3f}, {scale[1]:.3f}, {scale[2]:.3f})")
+
+            # Check if scale is different from 1.0 (indicating resolution-based scaling)
+            if abs(scale[0] - 1.0) > 0.001 or abs(scale[1] - 1.0) > 0.001:
+                print(f"    ✓ Custom scaling applied (resolution-based)")
+            else:
+                print(f"    ⚠ Default scaling (1.0) - may not be using resolution data")
+        else:
+            print(f"  Texture {layer_index}: ✗ No individual mapping node found")
+
+    # Check blend maps
+    blend_nodes = [node for node in nodes if node.type == 'TEX_IMAGE' and node.name.startswith('BlendMap_')]
+    print(f"  Found {len(blend_nodes)} blend map nodes")
+
+    # Check mix nodes
+    mix_nodes = [node for node in nodes if node.type == 'MIX_RGB' and node.name.startswith('Mix_')]
+    print(f"  Found {len(mix_nodes)} mix nodes for blending")
+
+    print("=== End Verification ===")
 
 
 def setup_viewport_for_textures():

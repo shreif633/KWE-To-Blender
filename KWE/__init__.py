@@ -719,9 +719,11 @@ class KAL_PT_texture_panel(bpy.types.Panel):
             # Texture slot label with resolution info
             col = row.column()
             if has_image:
-                col.label(text=f"{i}: {tex_name} (ENV:{env_res[0]}x{env_res[1]})", icon='TEXTURE_DATA')
+                col.label(text=f"{i}: {tex_name}", icon='TEXTURE_DATA')
+                col.label(text=f"    Resolution: {env_res[0]}x{env_res[1]}", icon='BLANK1')
             else:
-                col.label(text=f"{i}: {tex_name} (ENV:{env_res[0]}x{env_res[1]})", icon='ERROR')
+                col.label(text=f"{i}: {tex_name}", icon='ERROR')
+                col.label(text=f"    Resolution: {env_res[0]}x{env_res[1]} (Missing)", icon='BLANK1')
 
             # Replace button
             col = row.column()
@@ -795,7 +797,15 @@ class KAL_PT_env_texture_browser(bpy.types.Panel):
                 col.label(text=f"{i:3d}")
 
                 col = row.column()
-                col.label(text=texture['name'], icon=icon)
+                # Get resolution info if available
+                texture_data = obj.get('kcm_textures', {}) if obj else {}
+                texture_resolutions = texture_data.get('texture_resolutions', [])
+                resolution_text = ""
+                if i < len(texture_resolutions):
+                    width, height = texture_resolutions[i]
+                    resolution_text = f" ({width}x{height})"
+
+                col.label(text=f"{texture['name']}{resolution_text}", icon=icon)
 
                 # Action buttons
                 if obj and 'kcm_textures' in obj:
